@@ -12,9 +12,10 @@ import type {
 import { applyNewActivityToSummary } from '../analytics/managedService.js';
 import { createDemoSeed } from '../demo/demoDataProvider.js';
 import type { AppEnv } from '../config/env.js';
+import { LiveFileRepository } from './liveFileRepository.js';
 
 export interface IPortalRepository {
-  readonly mode: 'demo' | 'postgres';
+  readonly mode: 'demo' | 'live' | 'postgres';
   listCustomers(): Promise<Customer[]>;
   getCustomer(customerId: string): Promise<Customer | null>;
   getTenant(tenantId: string): Promise<Tenant | null>;
@@ -32,6 +33,7 @@ export interface IPortalRepository {
   listCollectionRuns(customerId: string): Promise<CollectionRun[]>;
   saveCollectionRun(run: CollectionRun): Promise<void>;
   healthCheck(): Promise<boolean>;
+  triggerLiveCollection?(customerId: string, periodId?: string, triggeredBy?: string): Promise<CollectionRun | null>;
 }
 
 /**
@@ -386,6 +388,9 @@ export class PostgresRepository implements IPortalRepository {
 }
 
 export function createRepository(env: AppEnv): IPortalRepository {
+  if (env.DATA_PROVIDER === 'live') {
+    return new LiveFileRepository(env);
+  }
   if (env.DATA_PROVIDER === 'postgres') {
     if (!env.DATABASE_URL) {
       throw new Error('DATABASE_URL is required when DATA_PROVIDER=postgres');

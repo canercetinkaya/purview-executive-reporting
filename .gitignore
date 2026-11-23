@@ -19,8 +19,9 @@ secret.txt
 smtp.txt
 customer-secrets*.json
 
-# Collector runtime snapshots
+# Collector runtime snapshots & live local data
 collectors/powershell/output/
+data/live-snapshots/
 *.snapshot.json
 
 # OS, editor & verification scratch artifacts

@@ -489,7 +489,21 @@ export function createApiRouter(repo: IPortalRepository): Router {
     requirePermission('collection:trigger'),
     requireCustomerScope(),
     async (req: AuthenticatedRequest, res) => {
-      const resolved = await resolvePeriodSnapshots(req.params.customerId!, req.query.period);
+      const customerId = paramStr(req.params.customerId);
+      const periodQuery = typeof req.query.period === 'string' ? req.query.period : undefined;
+      const triggeredBy = `${req.principal!.displayName} (${req.principal!.role})`;
+
+      if (repo.mode === 'live' && repo.triggerLiveCollection) {
+        const liveRun = await repo.triggerLiveCollection(customerId, periodQuery, triggeredBy);
+        if (!liveRun) {
+          res.status(404).json({ error: 'NOT_FOUND', message: 'Live customer not found.' });
+          return;
+        }
+        res.status(202).json({ accepted: true, mode: repo.mode, run: liveRun });
+        return;
+      }
+
+      const resolved = await resolvePeriodSnapshots(customerId, periodQuery);
       if (!resolved?.current) {
         res.status(404).json({ error: 'NOT_FOUND', message: 'Customer snapshot not found.' });
         return;
@@ -504,7 +518,7 @@ export function createApiRouter(repo: IPortalRepository): Router {
         startedAt: started.toISOString(),
         completedAt: completed.toISOString(),
         durationMs: 1850,
-        triggeredBy: `${req.principal!.displayName} (${req.principal!.role})`,
+        triggeredBy,
         status: 'PartialSuccess' as const,
         throttleEvents429: 0,
         apiFailures: 0,

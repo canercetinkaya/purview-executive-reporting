@@ -138,19 +138,22 @@ Demo modunda sayfa üstünde belirgin **DEMO DATA** şeridi gösterilir ve 2 ayr
 
 ---
 
-## Gerçek Müşteri Kiracısını Bağlama (Özet)
+## Gerçek veya Test Kiracısını 2 Komutta Bağlama (`DATA_PROVIDER=live`)
 
-1. Müşterinin Microsoft Entra ID kiracısında tek kiracılı bir App Registration oluşturun ve yukarıdaki **salt okunur** izinlere yönetici onayı verin ([docs/GRAPH-PERMISSIONS.md](docs/GRAPH-PERMISSIONS.md)).
-2. PostgreSQL 16 veritabanını başlatıp [001_initial_schema.sql](apps/api/src/persistence/migrations/001_initial_schema.sql) şemasını uygulayın (veya `docker compose up -d --build` kullanın).
-3. `.env.example` dosyasını `.env` olarak kopyalayıp `DATA_PROVIDER=postgres`, `AUTH_MODE=entra` ve Azure Key Vault / Entra ayarlarını girin ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
-4. Politika envanteri için Windows/PowerShell 7 üzerinde salt okunur toplayıcıyı çalıştırın:
-   ```powershell
-   .\collectors\powershell\Invoke-PurviewComplianceCollect.ps1 `
-     -CustomerId cust-ornek `
-     -Organization ornek.onmicrosoft.com `
-     -AppId <APP_CLIENT_ID> `
-     -CertificateThumbprint <SERTIFIKA_THUMBPRINT>
-   ```
+PostgreSQL veya Docker kurmadan, gerçek kiracınızdaki canlı Microsoft Graph + DLP.All + IPPS verisiyle raporu hemen görmek için:
+
+```powershell
+# 1. Tek seferlik salt okunur uygulama kaydı ve .env kurulumu:
+.\collectors\powershell\Setup-PurviewTestTenant.ps1 -Organization <alan-adiniz.onmicrosoft.com>
+
+# 2. (İsteğe bağlı) Purview politika envanteri (DLP/Etiket/İç Tehdit modları):
+.\collectors\powershell\Invoke-PurviewComplianceCollect.ps1 -CustomerId cust-test-tenant -Organization <alan-adiniz.onmicrosoft.com>
+
+# 3. Portalı başlatın -> http://localhost:3010
+npm run dev
+```
+
+*(Kalıcı kurumsal üretim kurulumu için PostgreSQL 16 + `docker compose up -d --build` + `AUTH_MODE=entra` adımları [DEPLOYMENT.md](docs/DEPLOYMENT.md) dosyasındadır.)*
 
 ---
 
