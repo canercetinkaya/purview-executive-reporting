@@ -1,34 +1,24 @@
-# Dependencies & build outputs
-node_modules/
-dist/
-.next/
-out/
-coverage/
-*.tsbuildinfo
-
-# Local environment & secrets (never commit)
+# Yerel gizli veriler ve musteri yapilandirmalari (asla commit edilmez)
+customer.json
+secret.txt
+smtp.txt
 .env
-.env.local
-.env.*.local
 *.pfx
 *.p12
 *.key
 *.pem
 *.cer
-secret.txt
-smtp.txt
-customer-secrets*.json
 
-# Collector runtime snapshots & live local data
-collectors/powershell/output/
-data/live-snapshots/
-*.snapshot.json
+# Calisma ciktilari, anlik goruntuler ve arsivler
+Output/
+Archive/
+Logs/
+Snapshots/
+*.log
+*.pdf
 
-# OS, editor & verification scratch artifacts
+# Isletim sistemi / editor kalintilari
 .DS_Store
 Thumbs.db
 .vscode/
-.idea/
 .agents/
-*.log
-scratch/

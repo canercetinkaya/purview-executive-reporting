@@ -1,0 +1,57 @@
+{
+  "_aciklama": "Bu dosya Install-PurviewReport.ps1 tarafindan otomatik uretilir. Elle duzenlemek isterseniz customer.json adiyla kaydedin.",
+
+  "CustomerName": "Contoso Corp",
+  "ProviderName": "Security Operations",
+  "Organization": "contoso.onmicrosoft.com",
+  "TenantId": "00000000-0000-0000-0000-000000000000",
+  "ClientId": "00000000-0000-0000-0000-000000000000",
+  "AuthMode": "Secret",
+  "CertificateThumbprint": "",
+  "ProxyUrl": "",
+
+  "Purview": {
+    "PolicySnapshotPath": "Snapshots\\purview-policies.json",
+    "EnableBetaLabelApi": false,
+    "AuditPollTimeoutSeconds": 45
+  },
+
+  "Schedule": {
+    "Weekly": true,
+    "WeeklyDay": "MON",
+    "WeeklyTime": "07:30",
+    "Monthly": true,
+    "MonthlyDay": 1,
+    "MonthlyTime": "06:00"
+  },
+
+  "Report": {
+    "Format": "HTML",
+    "AttachPdf": true,
+    "LogoPath": "logo.png",
+    "Language": "tr"
+  },
+
+  "Mail": {
+    "Method": "Graph",
+    "From": "purview-report@contoso.com",
+    "To": [ "compliance@contoso.com" ],
+    "Cc": [ "secops@contoso.com" ],
+    "AlertTo": "secops@contoso.com"
+  },
+
+  "Smtp": {
+    "Server": "smtp.office365.com",
+    "Port": 587,
+    "UseSsl": true,
+    "User": ""
+  },
+
+  "Thresholds": {
+    "HighSeverityAlerts": 1,
+    "OpenIncidents": 1,
+    "TestModeDlpPolicies": 1,
+    "DlpEventsMonthly": 25,
+    "OpenIncidentAgeDays": 14
+  }
+}

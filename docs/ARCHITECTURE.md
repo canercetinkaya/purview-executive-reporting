@@ -1,54 +1,33 @@
-# Architecture Overview
+# Mimari Tasarım ve Raporlama Kataloğu
 
-## 1. Architectural Decision & Stack Justification
+Bu doküman `Purview Executive Reporting` servisinin teknik mimarisini, veri kaynaklarının sınırlarını ve ürettiği 3 sayfalık aylık yönetici raporunun yapısını özetler.
 
-The portal is implemented as a modular TypeScript npm-workspaces monorepo paired with PostgreSQL persistence, a read-only PowerShell 7 Security & Compliance collector bridge, and Docker Compose orchestration:
+## 1. Temel Mimari İlkeleri
 
-| Layer | Technology | Justification |
+- **Sıfır Web Sunucusu ve Sıfır Ek Altyapı:** Çalışma zamanı yalnızca PowerShell, yerel JSON/CSV arşivi ve Windows Task Scheduler üzerine kuruludur.
+- **Salt Okunur Tasarım:** Tüm API çağrıları `GET` (yalnızca `auditLog/queries` için geçici arama işi açma ve `DLP.All` aboneliği başlatma `POST` istekleri) ve `Connect-IPPSSession` üzerinde yalnızca `Get-*` komutlarıyla sınırlıdır.
+- **Şeffaf Veri Durumu:** Lisansı bulunmayan veya henüz onaylanmamış bir kaynak sessizce sıfır olarak gösterilmez; her raporda **Veri Kaynağı Sağlık Matrisi** tablosunda `Erişilebilir`, `Kısmi Veri`, `Yetki Eksik`, `Lisanssız`, `Beta API` veya `IPPS Anlık Görüntüsü Gerekli` durumu belirtilir.
+
+## 2. Kullanılan Microsoft Veri Kaynakları ve Bilinen API Sınırları
+
+| Katman | Uç Nokta / Komut | Teknik Not ve Sınır |
 | :--- | :--- | :--- |
-| **Shared Domain** | `packages/domain` (TypeScript) | Zero-dependency domain entities, 7-role RBAC policy engine, tenant isolation guards (`assertCustomerAccess`), and transparent Posture Score math shared identically between backend and frontend. |
-| **Backend API** | `apps/api` (Node.js / Express / TypeScript / Zod) | Clean separation across `auth/`, `connectors/`, `analytics/`, `persistence/`, `reporting/`, `observability/`, and `routes/`. Resilient Graph HTTP client using native `fetch` with proactive OAuth2 token refresh, `429 Retry-After`, and `@odata.nextLink` pagination. |
-| **Database** | PostgreSQL 16 (`001_initial_schema.sql`) | Multi-tenant relational schema (`tenants`, `customers`, `subscriptions`, `reporting_periods`, `monthly_snapshots`, `recommendations`, `managed_service_activities`, `collection_runs`) with zero-config `InMemoryDemoRepository` fallback for instant local evaluation. |
-| **PowerShell Collector** | `collectors/powershell/` (PowerShell 7) | Bridges Security & Compliance (`Connect-IPPSSession`) policy configuration cmdlets (`Get-DlpCompliancePolicy`, `Get-LabelPolicy`, `Get-RetentionCompliancePolicy`, `Get-InsiderRiskPolicy`, `Get-SupervisoryReviewPolicyV2`) that lack complete Graph v1.0 coverage. |
-| **Frontend Portal** | `apps/web` (Next.js 15 / React 19 / Tailwind CSS) | Commercial SaaS executive interface with Microsoft Fluent-aligned palette, Paper Light & Ink Dark themes, zero external chart runtime bloat (accessible inline SVG charts), and printable A4 executive reports. |
+| Uyarılar | `GET /v1.0/security/alerts_v2` | Emekliye ayrılan `/security/alerts` yerine v2 kullanılır. |
+| Olaylar | `GET /v1.0/security/incidents?$top=50` | Microsoft Graph v1.0 `$top` parametresi üst sınırı **50** olarak uygulanır. |
+| DLP Olayları | `manage.office.com/.../content?contentType=DLP.All` | Canlı sorgu yalnızca **son 7 günü** ve istek başına **24 saatlik** dilimi kapsar; haftalık arşivler aylık raporda tekilleştirilerek birleştirilir. |
+| Denetim Günlüğü | `POST/GET /v1.0/security/auditLog/queries` | Asenkron çalışır; yapılandırılan bekleme süresinde bitmezse raporu bloke etmez, `Kısmi Veri` işaretler. |
+| eDiscovery | `GET /v1.0/security/cases/ediscoveryCases` | İlgili lisans yoksa HTTP 403 döner ve `Lisanssız` olarak raporlanır. |
+| Politika Envanteri | `Get-DlpCompliancePolicy`, `Get-Label`, `Get-LabelPolicy`, `Get-RetentionCompliancePolicy`, `Get-InsiderRiskPolicy`, `Get-SupervisoryReviewPolicyV2` | `Snapshots\purview-policies.json` üzerinden okunur. Opsiyonel `EnableBetaLabelApi` bayrağı açıkça `Beta API` etiketiyle kullanılabilir. |
 
-*Note on Runtime Justification:* Node.js 22+ TypeScript workspaces + PostgreSQL + PowerShell 7 was chosen so both the backend REST API, shared domain RBAC/scoring engine, and PowerShell IPPS bridge build, test, and run cleanly in standard enterprise Linux/Windows CI and container pipelines.
+## 3. Rapor Çıktı Yapısı
 
----
+### Haftalık Özet (`-Mode Weekly` — 1 Sayfa A4)
+1. 6 KPI Kartı (DLP Politikası, Test Kipindeki Politikalar, DLP Olay Eşleşmesi, Purview Uyarıları, Açık Olaylar, Etiket/İç Tehdit Politikaları)
+2. Eşik Tabanlı Dikkat Gerektiren Başlıklar (`thresholds`)
+3. Son Güvenlik Uyarıları + Veri Kaynağı Sağlık Matrisi
+4. DLP Politika Envanteri Özeti
 
-## 2. Logical Architecture Diagram
-
-```text
-+-------------------------------------------------------------------------+
-|                    BROWSER (CIO / CISO / Analyst / Admin)               |
-|           Next.js 15 Executive Web Portal (apps/web :3010)              |
-|   Customer / Period / Window Controls  |  Printable A4  |  CSV/JSON     |
-+------------------------------------+------------------------------------+
-                                     | HTTPS / Rewrites (/api/v1/*)
-                                     v
-+-------------------------------------------------------------------------+
-|                 API & ANALYTICS GATEWAY (apps/api :4010)                |
-|  Helmet + CORS + RateLimit -> Auth (Entra OIDC JWT | Demo Persona)      |
-|  RBAC + Tenant Isolation Middleware (assertPermission / assertCustomer) |
-|                                                                         |
-|  Analytics Engine: Trends · Scorecard · Narrative · Managed Service     |
-|  Connectors Suite: Graph v1.0 (alerts_v2, incidents, auditLog, cases)   |
-|                    O365 Management (DLP.All) · IPPS Snapshot · Sentinel |
-+-------------------+---------------------------------+-------------------+
-                    |                                 |
-        +-----------v-----------+         +-----------v-----------+
-        | PostgreSQL 16         |         | Microsoft Cloud       |
-        | (Production History)  |         | - graph.microsoft.com |
-        | or In-Memory Demo     |         | - manage.office.com   |
-        +-----------------------+         | - IPPS PowerShell     |
-                                          +-----------------------+
-```
-
----
-
-## 3. Clean Module Separation
-
-- `packages/domain/src/rbac.ts`: Single source of truth for permissions and tenant isolation (`assertCustomerAccess`).
-- `apps/api/src/connectors/`: Every connector implements `IMicrosoftConnector` (`initialize`, `validatePermissions`, `testConnection`, `collect`, `normalize`, `getHealth`, `getLastCollectionStatus`).
-- `apps/api/src/analytics/`: Pure functions operating on `MonthlySnapshot` objects without mixing UI concerns.
-- `apps/api/src/persistence/repository.ts`: Strict separation between `InMemoryDemoRepository` (`isDemo = true`) and `PostgresRepository` (`WHERE is_demo = FALSE`). Demo records can never leak into production customer views.
+### Aylık Yönetim Raporu (`-Mode Monthly` — 3 Sayfa A4)
+- **Sayfa 1 — Yönetici Özeti ve Kapsam:** Dönem anlatımı, önceki aya kıyas özeti, Purview kontrol kartları, DLP İş Yükü Kapsamı çubukları ve Veri Kaynağı Sağlık Matrisi.
+- **Sayfa 2 — Olay, DLP ve Dönem Trendi:** Önceki dönem `Archive/Monthly/<YYYY-MM>/kpi.json` dosyasıyla karşılaştırmalı KPI tablosu, incident şiddet dağılımı, en çok tetiklenen DLP politikaları ve son güvenlik uyarıları.
+- **Sayfa 3 — Envanter ve Hizmet Aksiyonları:** Aktif DLP politikalarının kip (`Enforce`, `TestWithNotifications`, `TestWithoutNotifications`) tablosu, yönetilen hizmet faaliyet kartları, incident sınıflandırması ve gelecek ay için otomatik üretilmiş öncelikli aksiyon önerileri.

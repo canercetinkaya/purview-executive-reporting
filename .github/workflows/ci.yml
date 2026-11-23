@@ -1,48 +1,17 @@
-name: CI — Build, Test, Security & PowerShell Verification
+name: PowerShell CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
 
 permissions:
   contents: read
 
 jobs:
-  node-verify:
-    name: Typecheck, Lint, Tests & Production Builds
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci || npm install
-
-      - name: Typecheck all workspaces
-        run: npm run typecheck
-
-      - name: Lint API and Web
-        run: npm run lint
-
-      - name: Run unit, integration, connector & UI tests
-        run: npm test
-
-      - name: Production build (domain, api, web)
-        run: npm run build
-
-      - name: Dependency vulnerability audit (high/critical)
-        run: npm audit --audit-level=high --omit=dev
-
-  powershell-verify:
-    name: PowerShell Collector PSSA & Pester
+  verify:
+    name: PSSA & Pester Verification
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -62,26 +31,22 @@ jobs:
       - name: Run PSScriptAnalyzer
         shell: pwsh
         run: |
-          $results = Invoke-ScriptAnalyzer -Path ./collectors/powershell -Recurse -Settings ./collectors/powershell/PSScriptAnalyzerSettings.psd1
-          if ($results) { $results | Format-Table ScriptName, Line, Severity, RuleName, Message -AutoSize }
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+          if ($results) {
+            $results | Format-Table ScriptName, Line, Severity, RuleName, Message -AutoSize
+          }
           $errors = @($results | Where-Object { $_.Severity -eq 'Error' })
-          if ($errors.Count -gt 0) { exit 1 }
+          if ($errors.Count -gt 0) {
+            Write-Error "PSScriptAnalyzer found $($errors.Count) error(s)."
+            exit 1
+          }
+          Write-Host "PSScriptAnalyzer PASS (0 Errors, $($results.Count) Warnings)."
 
-      - name: Run Pester collector tests
+      - name: Run Pester tests
         shell: pwsh
         run: |
           $cfg = New-PesterConfiguration
-          $cfg.Run.Path = './collectors/powershell/tests'
+          $cfg.Run.Path = './tests'
           $cfg.Run.Exit = $true
           $cfg.Output.Verbosity = 'Detailed'
           Invoke-Pester -Configuration $cfg
-
-  docker-compose-validate:
-    name: Validate Dockerfiles & Compose Configuration
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Validate docker-compose syntax
-        run: docker compose config -q
