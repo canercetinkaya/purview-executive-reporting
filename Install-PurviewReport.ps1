@@ -41,9 +41,11 @@ $script:BaseRoles = @(
     @{ Resource = $script:GraphAppId; Name = 'SecurityAlert.Read.All';                 Aciklama = 'Graph Security alerts_v2 (Purview ve M365 uyarilari)' }
     @{ Resource = $script:GraphAppId; Name = 'SecurityIncident.Read.All';              Aciklama = 'Graph Security olaylari ($top=50)' }
     @{ Resource = $script:GraphAppId; Name = 'AuditLogsQuery.Read.All';                Aciklama = 'Graph Purview Audit Log sorgulari' }
-    @{ Resource = $script:GraphAppId; Name = 'InformationProtectionPolicy.Read.All';   Aciklama = 'Hassasiyet etiketi politika kapsami' }
+    @{ Resource = $script:GraphAppId; Name = 'InformationProtectionPolicy.Read.All';   Aciklama = 'Hassasiyet etiketi tanimlari ve politika kapsami' }
+    @{ Resource = $script:GraphAppId; Name = 'RecordsManagement.Read.All';             Aciklama = 'Kayit yonetimi ve saklama etiketleri' }
     @{ Resource = $script:GraphAppId; Name = 'eDiscovery.Read.All';                    Aciklama = 'eDiscovery vaka ozetleri (lisans varsa)' }
-    @{ Resource = $script:O365AppId;  Name = 'ActivityFeed.Read';                      Aciklama = 'Office 365 Management Activity API (DLP.All olaylari)' }
+    @{ Resource = $script:O365AppId;  Name = 'ActivityFeed.Read';                      Aciklama = 'O365 Activity API (Audit.General/SharePoint/Exchange)' }
+    @{ Resource = $script:O365AppId;  Name = 'ActivityFeed.ReadDlp';                   Aciklama = 'O365 Activity API (DLP.All kural, SIT ve kullanici eslesmeleri)' }
 )
 
 # ------------------------------------------------------------------ ekran ---

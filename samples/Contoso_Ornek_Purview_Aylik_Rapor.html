@@ -1,0 +1,218 @@
+﻿<!DOCTYPE html><html lang='tr'><head><meta charset='utf-8'>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:;">
+<title>Aylık Purview Veri Güvenliği Raporu</title>
+<style>
+ @page { size: A4; margin: 9mm 9mm; }
+ body { font-family: "Segoe UI", Arial, sans-serif; color:#0f172a; font-size:9pt; margin:0; background:#fff; }
+ .wrap { max-width: 920px; margin: 0 auto; padding: 4px 12px; }
+ .page { page-break-after: always; }
+ .page:last-child { page-break-after: auto; }
+ header { border-bottom:3px solid #0f4c81; padding-bottom:5px; margin-bottom:8px; overflow:hidden; }
+ header h1 { color:#0f4c81; font-size:16pt; margin:0; }
+ header .sub { color:#475569; font-size:8.5pt; margin-top:2px; line-height:1.35; }
+ .brand { float:right; color:#0f4c81; font-weight:600; font-size:9.5pt; }
+ .logo { float:right; max-height:36px; }
+ h2 { color:#0f4c81; font-size:11pt; margin:10px 0 5px; border-left:4px solid #0f4c81; padding-left:7px; }
+ p { margin: 5px 0; line-height: 1.4; }
+ .cards { display:table; width:100%; table-layout:fixed; border-spacing:5px 0; margin-top:4px; }
+ .card { display:table-cell; text-align:center; border:1px solid #cbd5e1; border-radius:4px; padding:6px 3px; background:#f8fafc; }
+ .card b { display:block; font-size:15.5pt; color:#0f4c81; line-height:1.15; }
+ .card span { font-size:7.5pt; color:#475569; }
+ .card.warn { background:#fef2f2; border-color:#fecaca; }
+ .card.warn b { color:#b91c1c; }
+ .card.amber { background:#fffbeb; border-color:#fde68a; }
+ .card.amber b { color:#b45309; }
+ .card.good { background:#f0fdf4; border-color:#bbf7d0; }
+ .card.good b { color:#15803d; }
+ table { width:100%; border-collapse:collapse; margin-top:4px; font-size:8.3pt; }
+ th { background:#0f4c81; color:#fff; text-align:left; padding:3.5px 6px; font-weight:600; }
+ td { border-bottom:1px solid #e2e8f0; padding:3.5px 6px; vertical-align:top; }
+ td.num { text-align:right; white-space:nowrap; }
+ .two { display:table; width:100%; table-layout:fixed; border-spacing:8px 0; }
+ .col { display:table-cell; vertical-align:top; }
+ .bar { display:table; width:100%; margin:3px 0; font-size:8.3pt; }
+ .bl { display:table-cell; width:40%; color:#334155; }
+ .bt { display:table-cell; vertical-align:middle; background:#f1f5f9; border-radius:2px; }
+ .bt i { display:block; height:9px; border-radius:2px; }
+ .bv { display:table-cell; width:12%; text-align:right; font-weight:600; }
+ .note { font-size:7.6pt; color:#64748b; margin-top:7px; line-height:1.4; }
+ .up { color:#b91c1c; font-weight:600; }
+ .down { color:#15803d; font-weight:600; }
+ .flag { background:#fffbeb; border-left:4px solid #d97706; padding:5px 8px; margin:4px 0; font-size:8.4pt; }
+ .flag.crit { background:#fef2f2; border-left-color:#b91c1c; }
+ .flag.ok { background:#f0fdf4; border-left-color:#15803d; }
+ .badge { display:inline-block; padding:1px 5px; border-radius:3px; font-size:7.6pt; font-weight:600; }
+ .st-ok { background:#dcfce7; color:#166534; }
+ .st-warn { background:#fef3c7; color:#92400e; }
+ .st-bad { background:#fee2e2; color:#991b1b; }
+ .st-muted { background:#f1f5f9; color:#475569; }
+</style></head><body><div class='wrap'>
+
+<div class='page'>
+  <header><span class='brand'>Security Operations</span><h1>Aylık Purview Veri Güvenliği ve Uyumluluk Raporu</h1>
+  <div class='sub'>Contoso Corp &nbsp;|&nbsp; Microsoft Purview Yönetilen Hizmet Raporu (Sayfa 1/4 — Yönetici Özeti)<br>
+  Dönem: Ekim 2026 &nbsp;|&nbsp; Rapor tarihi: 23.11.2026 &nbsp;|&nbsp; Hizmet sağlayıcı: Security Operations</div></header>
+
+  <h2>Yönetici Özeti</h2>
+  <p>Ekim 2026 döneminde Contoso Corp kiracısında <b>4</b> DLP politikası (<b>3</b> Enforce, <b>1</b> Test),
+  <b>13</b> hassasiyet etiketi tanımı (<b>8</b> aktif), <b>2</b> etiket yayınlama politikası,
+  <b>2</b> iç tehdit ve <b>2</b> iletişim uyumu politikası izlenmiştir.
+  Dönem boyunca <b>48</b> DLP kural eşleşmesi (<b>27</b> engelleme, <b>15</b> kullanıcı override),
+  <b>180</b> hassasiyet etiketi işlemi (<b>162</b> uygulama, <b>15</b> değişim/düşürme, <b>3</b> silme)
+  ve <b>4</b> güvenlik olayı (<b>3</b> kapatılan, <b>1</b> açık) kaydedilmiştir. Önceki döneme göre DLP olay sayısı artış göstermiştir (38 -&gt; 48).</p>
+
+  <h2>Dikkat Gerektiren Başlıklar</h2>
+  <div class='flag crit'>1 güvenlik olayı açık durumdadır ve analist takibi gerektirmektedir.</div><div class='flag crit'>Dönem içinde 2 yüksek şiddetli uyarı kaydedilmiştir.</div><div class='flag crit'>DLP engeli 15 kez kullanıcı gerekçesiyle aşılmıştır (Override); veri çıkışı gerekçeleri doğrulanmalıdır.</div><div class='flag'>15 hassasiyet etiketi değişimi/düşürmesi ve 3 etiket kaldırma işlemi tespit edilmiştir.</div><div class='flag'>1 DLP politikası hâlen Test/Denetim kipindedir; yanlış pozitif doğrulaması sonrası Enforce kipine geçiş değerlendirilmelidir.</div>
+
+  <h2>Purview Koruma ve Operasyon Özeti</h2>
+  <div class='cards'>
+    <div class='card'><b>4</b><span>DLP politikası (3 Enforce)</span></div>
+    <div class='card warn'><b>48</b><span>DLP olayı (30 yüksek)</span></div>
+    <div class='card amber'><b>27 / 15</b><span>DLP Engel / Override</span></div>
+    <div class='card'><b>8 / 13</b><span>Aktif hassasiyet etiketi</span></div>
+    <div class='card'><b>180</b><span>Etiket işlemi (162 uyg.)</span></div>
+    <div class='card warn'><b>1 / 4</b><span>Açık / Toplam incident</span></div>
+  </div>
+
+  <div class='two'>
+    <div class='col'><h2>DLP Politika İş Yükü Kapsamı</h2><div class='bar'><span class='bl'>Microsoft 365</span><span class='bt'><i style='width:100%;background:#0f4c81'></i></span><span class='bv'>1</span></div><div class='bar'><span class='bl'>Copilot / AI</span><span class='bt'><i style='width:100%;background:#0f4c81'></i></span><span class='bv'>1</span></div><div class='bar'><span class='bl'>Endpoint</span><span class='bt'><i style='width:100%;background:#0f4c81'></i></span><span class='bv'>1</span></div><div class='bar'><span class='bl'>OneDrive</span><span class='bt'><i style='width:100%;background:#0f4c81'></i></span><span class='bv'>1</span></div><div class='bar'><span class='bl'>Teams</span><span class='bt'><i style='width:100%;background:#0f4c81'></i></span><span class='bv'>1</span></div><div class='bar'><span class='bl'>Exchange</span><span class='bt'><i style='width:100%;background:#0f4c81'></i></span><span class='bv'>1</span></div><div class='bar'><span class='bl'>SharePoint</span><span class='bt'><i style='width:100%;background:#0f4c81'></i></span><span class='bv'>1</span></div></div>
+    <div class='col'><h2>Veri Yönetişimi ve Uyumluluk Kapsamı</h2>
+      <table>
+        <tr><th>Purview Kontrol Alanı</th><th style='text-align:right'>Kapsam / Adet</th></tr>
+        <tr><td>Hassasiyet Etiketi Yayınlama / Otomatik Etiket Pol.</td><td class='num'>2 / 2</td></tr>
+        <tr><td>Veri Saklama (Retention) Politikası / Kayıt Etiketi</td><td class='num'>3 / 4</td></tr>
+        <tr><td>İç Tehdit Yönetimi (Insider Risk) Politikası</td><td class='num'>2</td></tr>
+        <tr><td>İletişim Uyumu (Communication Compliance) Politikası</td><td class='num'>2</td></tr>
+        <tr><td>Birleşik Denetim Kaydı (Toplam / Purview İlişkili)</td><td class='num'>180 / 180</td></tr>
+        <tr><td>eDiscovery Vakaları (Açık / Toplam)</td><td class='num'>2 / 2</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2>Veri Kaynağı Sağlık ve Bağlantı Matrisi</h2>
+  <table><tr><th>Veri Kaynağı</th><th>Durum</th><th>Doğrulama ve Kapsam Notu</th></tr><tr><td>Graph Security Alerts v2</td><td><span class='badge st-ok'>Erişilebilir</span></td><td>4 Purview uyarisi</td></tr><tr><td>Graph Security Incidents</td><td><span class='badge st-ok'>Erişilebilir</span></td><td>4 olay (top=50)</td></tr><tr><td>O365 Activity API (DLP.All)</td><td><span class='badge st-ok'>Erişilebilir</span></td><td>48 DLP kural eslesmesi</td></tr><tr><td>O365 Activity API (Audit Akislari)</td><td><span class='badge st-ok'>Erişilebilir</span></td><td>180 etiket ve uyum kaydi</td></tr><tr><td>Graph Audit Log Queries</td><td><span class='badge st-ok'>Erişilebilir</span></td><td>Birlesik denetim sorgusu tamamlandi</td></tr><tr><td>Graph eDiscovery Cases</td><td><span class='badge st-ok'>Erişilebilir</span></td><td>2 aktif vaka</td></tr><tr><td>Purview Politika &amp; Etiket Envanteri</td><td><span class='badge st-ok'>Erişilebilir</span></td><td>IPPS + Graph Etiket API (13 etiket, 4 DLP pol.)</td></tr></table>
+  <p class='note'>Son envanter toplama: 23.11.2026 20:37 UTC. Eksik izin veya lisans nedeniyle alınamayan veriler sıfır olarak varsayılmaz, açıkça durum etiketiyle belirtilir.</p>
+</div>
+
+<div class='page'>
+  <header><span class='brand'>Security Operations</span><h1>Hassasiyet Etiketleri ve Bilgi Koruma Analizi</h1>
+  <div class='sub'>Contoso Corp &nbsp;|&nbsp; Ekim 2026 (Sayfa 2/4 — Information Protection &amp; Sensitivity Labels)</div></header>
+
+  <div class='cards'>
+    <div class='card'><b>8 / 13</b><span>Aktif / Toplam etiket tanımı</span></div>
+    <div class='card'><b>180</b><span>Toplam etiket işlemi</span></div>
+    <div class='card good'><b>162</b><span>Etiket uygulama (Applied)</span></div>
+    <div class='card amber'><b>15</b><span>Etiket değişimi / düşürme</span></div>
+    <div class='card warn'><b>3</b><span>Etiket kaldırma (Removed)</span></div>
+  </div>
+
+  <h2>Kiracı Hassasiyet Etiketi Envanteri (Information Protection)</h2>
+  <table>
+    <tr><th>Etiket Görünen Adı</th><th style='text-align:right'>Öncelik</th><th>Koruma Biçimi</th><th>Durum</th><th>Politika Açıklaması / Kapsam</th></tr>
+    <tr><td><b>RECETE (Kritik Veri)</b></td><td class='num'>12</td><td>Şifreleme + Filigran</td><td><span class='badge st-ok'>Aktif</span></td><td>Bu etiket, kritik veriler i&#231;in kullanılır. Etiketten &#231;ıkış aud...</td></tr><tr><td><b>Highly Confidential / Specific People</b></td><td class='num'>10</td><td>Şifreleme + Filigran</td><td><span class='badge st-ok'>Aktif</span></td><td>Yalnızca adlandırılmış kişilere &#246;zel şifreleme</td></tr><tr><td><b>Highly Confidential / All Employees</b></td><td class='num'>9</td><td>Şifreleme + Filigran</td><td><span class='badge st-ok'>Aktif</span></td><td>Y&#252;ksek gizlilikli kurumsal sır</td></tr><tr><td><b>Confidential / Trusted People</b></td><td class='num'>6</td><td>Şifreleme + Filigran</td><td><span class='badge st-ok'>Aktif</span></td><td>Yalnızca yetkilendirilmiş iş ortakları</td></tr><tr><td><b>Confidential / All Employees</b></td><td class='num'>5</td><td>Şifreleme + Filigran</td><td><span class='badge st-ok'>Aktif</span></td><td>Kurum i&#231;i gizli veri (şifreli ve filigranlı)</td></tr><tr><td><b>General / All Employees</b></td><td class='num'>2</td><td>Sınıflandırma</td><td><span class='badge st-ok'>Aktif</span></td><td>T&#252;m kurum &#231;alışanlarına a&#231;ık genel veri</td></tr><tr><td><b>Public</b></td><td class='num'>1</td><td>Sınıflandırma</td><td><span class='badge st-ok'>Aktif</span></td><td>Kamuya a&#231;ık kurumsal yayınlar</td></tr><tr><td><b>Personal</b></td><td class='num'>0</td><td>Sınıflandırma</td><td><span class='badge st-ok'>Aktif</span></td><td>Kişisel hassas olmayan i&#231;erik</td></tr>
+  </table>
+
+  <div class='two'>
+    <div class='col'>
+      <h2>Etiket Bazlı Kullanım ve Değişim Dağılımı</h2>
+      <table>
+        <tr><th>Etiket</th><th style='text-align:right'>Uyg.</th><th style='text-align:right'>Değ.</th><th style='text-align:right'>Silme</th><th style='text-align:right'>Toplam</th></tr>
+        <tr><td>General / All Employees</td><td class='num'>54</td><td class='num'>0</td><td class='num'>0</td><td class='num'><b>54</b></td></tr><tr><td>Confidential / All Employees</td><td class='num'>42</td><td class='num'>9</td><td class='num'>0</td><td class='num'><b>51</b></td></tr><tr><td>RECETE (Kritik Veri)</td><td class='num'>27</td><td class='num'>6</td><td class='num'>0</td><td class='num'><b>33</b></td></tr><tr><td>Highly Confidential / All Employees</td><td class='num'>18</td><td class='num'>0</td><td class='num'>3</td><td class='num'><b>21</b></td></tr><tr><td>Public</td><td class='num'>21</td><td class='num'>0</td><td class='num'>0</td><td class='num'><b>21</b></td></tr>
+      </table>
+    </div>
+    <div class='col'>
+      <h2>En Çok Etiket İşlemi Yapan Kullanıcılar</h2>
+      <table>
+        <tr><th>Kullanıcı</th><th>İş Yükü</th><th style='text-align:right'>Uyg.</th><th style='text-align:right'>Değ.</th><th style='text-align:right'>Silme</th></tr>
+        <tr><td>satis.destek@contoso.com</td><td>OneDrive</td><td class='num'>54</td><td class='num'>0</td><td class='num'>0</td></tr><tr><td>finans.operasyon@contoso.com</td><td>SharePoint</td><td class='num'>42</td><td class='num'>0</td><td class='num'>0</td></tr><tr><td>klinik.koordinator@contoso.com</td><td>SharePoint</td><td class='num'>27</td><td class='num'>0</td><td class='num'>0</td></tr><tr><td>kurumsal.iletisim@contoso.com</td><td>SharePoint</td><td class='num'>21</td><td class='num'>0</td><td class='num'>0</td></tr><tr><td>hukuk.musavir@contoso.com</td><td>Exchange</td><td class='num'>18</td><td class='num'>0</td><td class='num'>0</td></tr><tr><td>ik.bordro@contoso.com</td><td>Exchange</td><td class='num'>0</td><td class='num'>9</td><td class='num'>0</td></tr><tr><td>arge.analist@contoso.com</td><td>Endpoint</td><td class='num'>0</td><td class='num'>6</td><td class='num'>0</td></tr><tr><td>tedarik.uzmani@contoso.com</td><td>Endpoint</td><td class='num'>0</td><td class='num'>0</td><td class='num'>3</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <p class='note'>Not: Hassasiyet etiketi tanımları IPPS (Get-Label) ve Microsoft Graph Information Protection API üzerinden doğrulanır.
+  Yüksek öncelikli etiketlerden (ör. RECETE, Highly Confidential) daha düşük seviyeye yapılan indirmeler (downgrade) denetim kaydı gerektirir.</p>
+</div>
+
+<div class='page'>
+  <header><span class='brand'>Security Operations</span><h1>DLP Eşleşmeleri, Hassas Bilgi Türleri ve Kullanıcılar</h1>
+  <div class='sub'>Contoso Corp &nbsp;|&nbsp; Ekim 2026 (Sayfa 3/4 — Data Loss Prevention Derin Analizi)</div></header>
+
+  <div class='cards'>
+    <div class='card'><b>48</b><span>Toplam DLP eşleşmesi</span></div>
+    <div class='card warn'><b>30</b><span>Yüksek şiddetli DLP</span></div>
+    <div class='card good'><b>27</b><span>Engellenen (Block)</span></div>
+    <div class='card warn'><b>15</b><span>Kullanıcı Override</span></div>
+    <div class='card'><b>6</b><span>Bildirim / Denetim</span></div>
+  </div>
+
+  <h2>En Çok Eşleşen DLP Politikaları ve Kuralları</h2>
+  <table>
+    <tr><th>Politika Adı</th><th>Eşleşen Kural</th><th>Şiddet</th><th>Alınan Aksiyon</th><th style='text-align:right'>Olay</th><th style='text-align:right'>Override</th></tr>
+    <tr><td>TC Onay (KVKK &amp; PII Koruması)</td><td>Dış E-postada Toplu TCKN ve IBAN Engelleme</td><td>High</td><td><span class='badge st-ok'>Engellendi (Block)</span></td><td class='num'><b>12</b></td><td class='num'>0</td></tr><tr><td>TC Onay (KVKK &amp; PII Koruması)</td><td>SharePoint Dış Paylaşımda Kredi Kartı &amp; TCKN</td><td>High</td><td><span class='badge st-bad'>Kullanıcı Override</span></td><td class='num'><b>9</b></td><td class='num'>9</td></tr><tr><td>DSPM for AI: Detect sensitive info added to AI sites</td><td>Harici &#220;retken Yapay Zek&#226; Sitelerine Veri Y&#252;kleme Engeli</td><td>High</td><td><span class='badge st-ok'>Engellendi (Block)</span></td><td class='num'><b>9</b></td><td class='num'>0</td></tr><tr><td>Default policy for Teams</td><td>Teams Dış Sohbette Kredi Kartı / IBAN Paylaşımı</td><td>Medium</td><td><span class='badge st-ok'>Engellendi (Block)</span></td><td class='num'><b>6</b></td><td class='num'>0</td></tr><tr><td>DSPM for AI - Protect sensitive data from Copilot processing</td><td>Copilot İstemi İ&#231;inde RECETE / Kritik Veri Denetimi</td><td>Medium</td><td><span class='badge st-muted'>Denetim (Audit)</span></td><td class='num'><b>6</b></td><td class='num'>0</td></tr><tr><td>TC Onay (KVKK &amp; PII Koruması)</td><td>OneDrive Harici Bağlantıda Finansal IBAN Tespiti</td><td>Medium</td><td><span class='badge st-bad'>Kullanıcı Override</span></td><td class='num'><b>6</b></td><td class='num'>6</td></tr>
+  </table>
+
+  <div class='two'>
+    <div class='col'>
+      <h2>En Çok Eşleşen Hassas Bilgi Türleri (SIT)</h2>
+      <table>
+        <tr><th>Hassas Bilgi Türü (SIT)</th><th style='text-align:right'>Olay</th><th style='text-align:right'>Tespit Örneği</th></tr>
+        <tr><td>Turkey National Identification Number (TCKN)</td><td class='num'>21</td><td class='num'><b>441</b></td></tr><tr><td>Kaynak Kod &amp; API Anahtarı</td><td class='num'>9</td><td class='num'><b>54</b></td></tr><tr><td>TR IBAN</td><td class='num'>6</td><td class='num'><b>54</b></td></tr><tr><td>RECETE / Sağlık Verisi</td><td class='num'>6</td><td class='num'><b>30</b></td></tr><tr><td>Credit Card Number</td><td class='num'>6</td><td class='num'><b>24</b></td></tr>
+      </table>
+    </div>
+    <div class='col'>
+      <h2>DLP Olaylarının İş Yükü Dağılımı</h2>
+      <div class='bar'><span class='bl'>Exchange</span><span class='bt'><i style='width:100%;background:#0f4c81'></i></span><span class='bv'>12</span></div><div class='bar'><span class='bl'>Endpoint</span><span class='bt'><i style='width:75%;background:#0f4c81'></i></span><span class='bv'>9</span></div><div class='bar'><span class='bl'>SharePoint</span><span class='bt'><i style='width:75%;background:#0f4c81'></i></span><span class='bv'>9</span></div><div class='bar'><span class='bl'>Copilot / AI</span><span class='bt'><i style='width:50%;background:#0f4c81'></i></span><span class='bv'>6</span></div><div class='bar'><span class='bl'>OneDrive</span><span class='bt'><i style='width:50%;background:#0f4c81'></i></span><span class='bv'>6</span></div><div class='bar'><span class='bl'>Microsoft Teams</span><span class='bt'><i style='width:50%;background:#0f4c81'></i></span><span class='bv'>6</span></div>
+    </div>
+  </div>
+
+  <h2>En Çok DLP Tetikleyen Kullanıcılar ve Override Gerekçeleri</h2>
+  <table>
+    <tr><th>Kullanıcı (UPN)</th><th style='text-align:right'>Olay</th><th style='text-align:right'>Yüksek</th><th style='text-align:right'>Engel</th><th style='text-align:right'>Override</th><th style='text-align:right'>SIT Örneği</th><th>İş Yükleri</th><th>Son Override Gerekçesi</th></tr>
+    <tr><td><b>finans.operasyon@contoso.com</b></td><td class='num'>12</td><td class='num'>12</td><td class='num'>12</td><td class='num'>0</td><td class='num'>216</td><td>Exchange</td><td>-</td></tr><tr><td><b>ik.bordro@contoso.com</b></td><td class='num'>9</td><td class='num'>9</td><td class='num'>0</td><td class='num'>9</td><td class='num'>225</td><td>SharePoint</td><td>Yıllık bağımsız denetim firması aktarımı (Onay #4412)</td></tr><tr><td><b>arge.analist@contoso.com</b></td><td class='num'>9</td><td class='num'>9</td><td class='num'>9</td><td class='num'>0</td><td class='num'>54</td><td>Endpoint</td><td>-</td></tr><tr><td><b>klinik.koordinator@contoso.com</b></td><td class='num'>6</td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td class='num'>30</td><td>Copilot / AI</td><td>-</td></tr><tr><td><b>tedarik.uzmani@contoso.com</b></td><td class='num'>6</td><td class='num'>0</td><td class='num'>0</td><td class='num'>6</td><td class='num'>54</td><td>OneDrive</td><td>Tedarik&#231;i mutabakat dosyası</td></tr><tr><td><b>satis.destek@contoso.com</b></td><td class='num'>6</td><td class='num'>0</td><td class='num'>6</td><td class='num'>0</td><td class='num'>24</td><td>Microsoft Teams</td><td>-</td></tr>
+  </table>
+
+  <p class='note'>Kaynak: Office 365 Management Activity API (DLP.All), Unified Audit Log (DlpRuleMatch) ve IPPS DLP kural envanteri.</p>
+</div>
+
+<div class='page'>
+  <header><span class='brand'>Security Operations</span><h1>Dönem Trendi, Politika Envanteri ve Aksiyon Planı</h1>
+  <div class='sub'>Contoso Corp &nbsp;|&nbsp; Ekim 2026 (Sayfa 4/4 — Trend, Denetim ve Yönetim Önerileri)</div></header>
+
+  <h2>Aylık Purview ve Güvenlik KPI Kıyaslaması</h2>
+  <table>
+    <tr><th>KPI</th><th style='text-align:right'>Bu dönem</th><th style='text-align:right'>Önceki dönem</th><th style='text-align:right'>Değişim</th></tr>
+    <tr><td>Toplam DLP politikası / Enforce kipinde</td><td class='num'>4 (3)</td><td class='num'>4</td><td class='num'>değişim yok</td></tr>
+    <tr><td>DLP kural eşleşmesi (Toplam)</td><td class='num'>48</td><td class='num'>38</td><td class='num up'>+10 (%26)</td></tr>
+    <tr><td>Yüksek şiddetli DLP olayı</td><td class='num'>30</td><td class='num'>38</td><td class='num down'>-8 (%21)</td></tr>
+    <tr><td>DLP kullanıcı override sayısı</td><td class='num'>15</td><td class='num'>17</td><td class='num down'>-2 (%12)</td></tr>
+    <tr><td>Hassasiyet etiketi uygulama (Applied)</td><td class='num'>162</td><td class='num'>126</td><td class='num up'>+36 (%29)</td></tr>
+    <tr><td>Hassasiyet etiketi değişim / kaldırma</td><td class='num'>18</td><td class='num'>17</td><td class='num up'>+1 (%6)</td></tr>
+    <tr><td>Purview / M365 güvenlik uyarısı (alerts_v2)</td><td class='num'>4</td><td class='num'>5</td><td class='num down'>-1 (%20)</td></tr>
+    <tr><td>Güvenlik olayı (Toplam / Kapatılan)</td><td class='num'>4 (3)</td><td class='num'>5</td><td class='num down'>-1 (%20)</td></tr>
+    <tr><td>Birleşik denetim kaydı (Unified Audit)</td><td class='num'>180</td><td class='num'>153</td><td class='num up'>+27 (%18)</td></tr>
+  </table>
+
+  <h2>Aktif DLP Politika Envanteri</h2>
+  <table>
+    <tr><th>Politika Adı</th><th>Kip</th><th>İş Yükü Kapsamı</th><th>Korunan Hassas Bilgi Türleri (SIT)</th><th style='text-align:right'>Son Güncelleme</th></tr>
+    <tr><td>Default policy for Teams</td><td><span class='badge st-ok'>Zorunlu (Enforce)</span></td><td>Teams</td><td>Credit Card Number, TR IBAN</td><td class='num'>13.06.2026</td></tr><tr><td>TC Onay (KVKK &amp; PII Koruması)</td><td><span class='badge st-ok'>Zorunlu (Enforce)</span></td><td>Exchange, SharePoint, OneDrive</td><td>Turkey National Identification Number (TCKN), TR IBAN, Credit Card Number</td><td class='num'>15.08.2026</td></tr><tr><td>DSPM for AI - Protect sensitive data from Copilot processing</td><td><span class='badge st-warn'>Sessiz Test</span></td><td>Microsoft 365, Copilot / AI</td><td>RECETE / Sağlık Verisi, Kaynak Kod &amp; API Anahtarı</td><td class='num'>02.10.2026</td></tr><tr><td>DSPM for AI: Detect sensitive info added to AI sites</td><td><span class='badge st-ok'>Zorunlu (Enforce)</span></td><td>Endpoint</td><td>Turkey National Identification Number (TCKN), Kaynak Kod &amp; API Anahtarı, Credit Card Number</td><td class='num'>02.10.2026</td></tr>
+  </table>
+
+  <div class='two'>
+    <div class='col'>
+      <h2>Son Güvenlik Uyarıları (alerts_v2)</h2>
+      <table><tr><th>Uyarı Başlığı</th><th>Şiddet</th><th>Durum</th><th style='text-align:right'>Tarih</th></tr><tr><td>DLP policy match: Multiple TCKN and IBAN records shared externally</td><td>high</td><td>inProgress</td><td class='num'>30.10.2026</td></tr><tr><td>Sensitivity label downgraded from RECETE (Kritik Veri) to General</td><td>high</td><td>new</td><td class='num'>28.10.2026</td></tr><tr><td>Endpoint DLP blocked sensitive source code paste to external AI site</td><td>medium</td><td>resolved</td><td class='num'>26.10.2026</td></tr><tr><td>Unusual volume of labeled file downloads from SharePoint Finance site</td><td>medium</td><td>resolved</td><td class='num'>23.10.2026</td></tr></table>
+      <h2>En Sık Denetim Operasyonları</h2>
+      <table><tr><th>Operasyon</th><th style='text-align:right'>Kayıt</th></tr><tr><td>SensitivityLabelApplied</td><td class='num'>162</td></tr><tr><td>SensitivityLabelUpdated</td><td class='num'>15</td></tr><tr><td>SensitivityLabelRemoved</td><td class='num'>3</td></tr></table>
+    </div>
+    <div class='col'>
+      <h2>Gelecek Ay İçin Öncelikli Aksiyonlar</h2>
+      <table><tr><th>#</th><th>Öneri</th></tr><tr><td class='num'>1</td><td>Test kipindeki 1 DLP politikasini yanlis pozitif dogrulamasi sonrasi Enforce kipine gecirin.</td></tr><tr><td class='num'>2</td><td>Donem icinde kullanicilar tarafindan 15 kez DLP kurali gerekce girilerek asilmistir (Override); gerekce metinlerini denetleyin.</td></tr><tr><td class='num'>3</td><td>15 etiket degisimi/dusurmesi ve 3 etiket kaldirma islemi kaydedilmistir; kritik verilerde etiket dusurme gerekcelerini inceleyin.</td></tr><tr><td class='num'>4</td><td>Acik durumdaki 1 guvenlik olayini analist atamasi ile sonuclandirin.</td></tr></table>
+    </div>
+  </div>
+
+  <p class='note'>Bu rapor Security Operations tarafından Microsoft Purview, Microsoft Graph Security v2 ve Office 365 Management Activity API verilerinden salt
+  okunur erişimle otomatik üretilmiştir. Üretim zamanı: 23.11.2026 20:37. Gizlilik: Kuruma Özel.</p>
+</div>
+
+</div></body></html>

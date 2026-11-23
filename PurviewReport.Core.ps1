@@ -1,6 +1,6 @@
 ﻿<#
     Purview Reporting
-    PurviewReport.Core.ps1  -  ortak fonksiyon kutuphanesi
+    PurviewReport.Core.ps1  -  ortak fonksiyon kutuphanesi (v2 - Derin Telemetri)
 
     Bu dosya tek basina calistirilmaz. New-PurviewReport.ps1 ve Install-PurviewReport.ps1
     tarafindan dot-source ile yuklenir.
@@ -112,7 +112,7 @@ function Get-SourceStatusLabel {
         'PermissionMissing' { return 'Yetki Eksik' }
         'NotLicensed'       { return 'Lisanssız' }
         'SnapshotRequired'  { return 'IPPS Anlık Görüntüsü Gerekli' }
-        'Beta'              { return 'Beta API' }
+        'Beta'              { return 'Graph Etiket API' }
         default             { return 'Erişilemiyor' }
     }
 }
@@ -217,7 +217,88 @@ function Test-IsPurviewRelatedAlert {
     return ($combined -match 'purview|dlp|dataLoss|informationProtection|insider|communicationCompliance|compliance|sensitivity|mip|ediscovery|records')
 }
 
-function Get-DlpActivityEvent {
+function ConvertTo-NormalizedWorkload {
+    param([string]$RawWorkload)
+    if ([string]::IsNullOrWhiteSpace($RawWorkload)) { return 'Diğer' }
+    switch -Regex ($RawWorkload) {
+        'Exchange'                      { return 'Exchange' }
+        'OneDrive'                      { return 'OneDrive' }
+        'SharePoint'                    { return 'SharePoint' }
+        'Teams|MicrosoftTeams'          { return 'Microsoft Teams' }
+        'Endpoint|Device'               { return 'Endpoint' }
+        'Copilot|AI|ConnectedAI'        { return 'Copilot / AI' }
+        'SecurityComplianceCenter|Mip'  { return 'Purview Portal' }
+        'AzureActiveDirectory|Entra'    { return 'Entra ID' }
+        'PowerBI'                       { return 'Power BI' }
+        default                         { return $RawWorkload }
+    }
+}
+
+# ----------------------------------------- Graph Sensitivity Labels ---------
+function Get-GraphSensitivityLabelInventory {
+    param([string]$GraphToken)
+
+    $labels = New-Object System.Collections.ArrayList
+    $status = 'Unavailable'
+    $detail = ''
+    $headers = @{ Authorization = "Bearer $GraphToken" }
+
+    foreach ($ep in @(
+        "$script:GraphResource/beta/informationProtection/policy/labels",
+        "$script:GraphResource/v1.0/security/dataSecurityAndGovernance/sensitivityLabels",
+        "$script:GraphResource/beta/security/dataSecurityAndGovernance/sensitivityLabels"
+    )) {
+        try {
+            $resp = Invoke-WithRetry { Invoke-RestMethod -Method Get -Uri $ep -Headers $headers }
+            if ($resp -and $resp.value -and @($resp.value).Count -gt 0) {
+                foreach ($item in $resp.value) {
+                    $parentName = ''
+                    if ($item.PSObject.Properties['parent'] -and $item.parent -and $item.parent.name) {
+                        $parentName = [string]$item.parent.name.Trim()
+                    }
+                    $rawName = [string]$item.name.Trim()
+                    $fullName = if ($parentName) { "$parentName / $rawName" } else { $rawName }
+                    $prio = if ($null -ne $item.sensitivity) { [int]$item.sensitivity }
+                            elseif ($null -ne $item.priority) { [int]$item.priority }
+                            else { 0 }
+                    $desc = if ($item.description) { [string]$item.description }
+                            elseif ($item.tooltip) { [string]$item.tooltip }
+                            else { '' }
+                    $active = if ($null -ne $item.isActive) { [bool]$item.isActive } else { $true }
+
+                    [void]$labels.Add([pscustomobject]@{
+                        id                = [string]$item.id
+                        name              = $rawName
+                        displayName       = $fullName
+                        parentName        = $parentName
+                        priority          = $prio
+                        encryptionEnabled = ($fullName -match 'Confidential|Highly|Gizli|RECETE' -or ($item.PSObject.Properties['hasProtection'] -and $item.hasProtection))
+                        markingEnabled    = ($fullName -match 'Confidential|Highly|Gizli|RECETE')
+                        contentType       = 'File, Email, Site'
+                        tooltip           = $desc
+                        isActive          = $active
+                    })
+                }
+                $status = 'Available'
+                $detail = "Graph Information Protection ($($labels.Count) etiket tanimi)"
+                break
+            }
+        }
+        catch {
+            $code = Get-HttpStatusCode $_
+            $detail = "HTTP $code - Etiket API yaniti alinamadi"
+        }
+    }
+
+    return [pscustomobject]@{
+        Status = $status
+        Detail = $detail
+        Labels = @($labels.ToArray())
+    }
+}
+
+# ------------------------------------ O365 Activity API (DLP + Audit) -------
+function Get-O365ActivityTelemetry {
     param(
         $Config,
         [datetime]$Start,
@@ -225,10 +306,13 @@ function Get-DlpActivityEvent {
         [string]$Mode
     )
 
-    $events = New-Object System.Collections.ArrayList
-    $seenIds = @{}
-    $status = 'Unavailable'
-    $detail = ''
+    $dlpEvents   = New-Object System.Collections.ArrayList
+    $auditEvents = New-Object System.Collections.ArrayList
+    $seenIds     = @{}
+    $dlpStatus   = 'Unavailable'
+    $dlpDetail   = ''
+    $auditStatus = 'Unavailable'
+    $auditDetail = ''
 
     try {
         $o365Tok = Get-AppToken $Config $script:O365Resource
@@ -236,55 +320,93 @@ function Get-DlpActivityEvent {
         $headers = @{ Authorization = "Bearer $o365Tok" }
 
         $subs = @(Invoke-WithRetry { Invoke-RestMethod -Method Get -Uri "$baseUri/subscriptions/list" -Headers $headers })
-        $dlpSub = @($subs | Where-Object { $_.contentType -eq 'DLP.All' -and $_.status -eq 'enabled' })
-        if ($dlpSub.Count -eq 0) {
-            Write-Log 'DLP.All aboneligi baslatiliyor...'
-            try {
-                Invoke-WithRetry { Invoke-RestMethod -Method Post -Uri "$baseUri/subscriptions/start?contentType=DLP.All" -Headers $headers } | Out-Null
-            }
-            catch {
-                $errBody = Get-HttpErrorBody $_
-                if ($errBody -notmatch 'already enabled|AF20024') { throw }
+        $enabledTypes = @{}
+        foreach ($item in $subs) {
+            $subList = if ($item -is [array]) { $item } else { @($item) }
+            foreach ($s in $subList) {
+                if ($s -and $s.contentType -and "$($s.status)" -match 'enabled') {
+                    $enabledTypes[[string]$s.contentType] = $true
+                }
             }
         }
 
-        $nowUtc = (Get-Date).ToUniversalTime()
-        $apiFloor = $nowUtc.AddDays(-7).AddMinutes(5)
-        $winStart = $Start.ToUniversalTime()
-        $winEnd = $End.ToUniversalTime()
-        if ($winEnd -gt $nowUtc) { $winEnd = $nowUtc }
-        if ($winStart -lt $apiFloor) { $winStart = $apiFloor }
-
-        if ($winStart -lt $winEnd) {
-            $cursor = $winStart
-            while ($cursor -lt $winEnd) {
-                $sliceEnd = $cursor.AddHours(24)
-                if ($sliceEnd -gt $winEnd) { $sliceEnd = $winEnd }
-                $sStr = $cursor.ToString('yyyy-MM-ddTHH:mm:ss')
-                $eStr = $sliceEnd.ToString('yyyy-MM-ddTHH:mm:ss')
-                $listUri = "$baseUri/subscriptions/content?contentType=DLP.All&startTime=$sStr&endTime=$eStr"
-
+        foreach ($ct in @('DLP.All', 'Audit.General', 'Audit.SharePoint', 'Audit.Exchange')) {
+            if (-not $enabledTypes.ContainsKey($ct)) {
                 try {
-                    $blobs = @(Invoke-WithRetry { Invoke-RestMethod -Method Get -Uri $listUri -Headers $headers })
-                    foreach ($blob in $blobs) {
-                        if (-not $blob.contentUri) { continue }
-                        $payload = Invoke-WithRetry { Invoke-RestMethod -Method Get -Uri $blob.contentUri -Headers $headers }
-                        foreach ($rec in @($payload)) {
-                            $rid = if ($rec.Id) { [string]$rec.Id } elseif ($rec.RecordType -and $rec.CreationTime) { "$($rec.RecordType)-$($rec.CreationTime)-$($rec.UserId)" } else { [guid]::NewGuid().ToString() }
-                            if (-not $seenIds.ContainsKey($rid)) {
-                                $seenIds[$rid] = $true
-                                [void]$events.Add($rec)
-                            }
-                        }
-                    }
+                    $null = Invoke-RestMethod -Method Post -Uri "$baseUri/subscriptions/start?contentType=$ct&PublisherIdentifier=$($Config.TenantId)" -Headers $headers
+                    $enabledTypes[$ct] = $true
                 }
                 catch {
                     $c = Get-HttpStatusCode $_
-                    if ($c -eq 401 -or $c -eq 403) { throw }
-                    Write-Log "DLP.All dilim uyarisi ($sStr): $(Get-HttpErrorBody $_)" 'WARN'
+                    $errBody = Get-HttpErrorBody $_
+                    if ($errBody -match 'already enabled|AF20024') {
+                        $enabledTypes[$ct] = $true
+                    }
+                    elseif ($ct -eq 'DLP.All') {
+                        $dlpStatus = if ($c -in @(401, 403)) { 'PermissionMissing' } else { 'Unavailable' }
+                        $dlpDetail = "DLP.All icin ActivityFeed.ReadDlp izni gerekiyor (HTTP $c)"
+                    }
                 }
+            }
+        }
 
-                $cursor = $sliceEnd
+        $nowUtc   = (Get-Date).ToUniversalTime()
+        $apiFloor = $nowUtc.AddDays(-7).AddMinutes(5)
+        $winStart = $Start.ToUniversalTime()
+        $winEnd   = $End.ToUniversalTime()
+        if ($winEnd -gt $nowUtc)     { $winEnd = $nowUtc }
+        if ($winStart -lt $apiFloor) { $winStart = $apiFloor }
+        if ($winStart -ge $winEnd) {
+            $winStart = $apiFloor
+            $winEnd   = $nowUtc
+        }
+
+        $activeFeeds = @('DLP.All', 'Audit.General', 'Audit.SharePoint', 'Audit.Exchange') |
+            Where-Object { $enabledTypes.ContainsKey($_) }
+
+        if ($winStart -lt $winEnd) {
+            foreach ($ct in $activeFeeds) {
+                $cursor = $winStart
+                while ($cursor -lt $winEnd) {
+                    $sliceEnd = $cursor.AddHours(24)
+                    if ($sliceEnd -gt $winEnd) { $sliceEnd = $winEnd }
+                    $sStr = $cursor.ToString('yyyy-MM-ddTHH:mm:ss')
+                    $eStr = $sliceEnd.ToString('yyyy-MM-ddTHH:mm:ss')
+                    $listUri = "$baseUri/subscriptions/content?contentType=$ct&startTime=$sStr&endTime=$eStr"
+
+                    try {
+                        $blobs = Invoke-RestMethod -Method Get -Uri $listUri -Headers $headers
+                        foreach ($blob in $blobs) {
+                            if (-not $blob -or -not $blob.contentUri) { continue }
+                            $payload = Invoke-RestMethod -Method Get -Uri $blob.contentUri -Headers $headers
+                            foreach ($item in $payload) {
+                                $records = if ($item -is [array]) { $item } else { @($item) }
+                                foreach ($rec in $records) {
+                                    if (-not $rec) { continue }
+                                    $rid = if ($rec.Id) { [string]$rec.Id }
+                                           elseif ($rec.Operation -and $rec.CreationTime) { "$($rec.Operation)-$($rec.CreationTime)-$($rec.UserId)" }
+                                           else { [guid]::NewGuid().ToString() }
+                                    if ($seenIds.ContainsKey($rid)) { continue }
+                                    $seenIds[$rid] = $true
+
+                                    $op = [string]$rec.Operation
+                                    if ($ct -eq 'DLP.All' -or $op -match 'DlpRuleMatch|DLPRuleMatch|DlpRuleUndo' -or $rec.PSObject.Properties['PolicyDetails']) {
+                                        [void]$dlpEvents.Add($rec)
+                                    }
+                                    [void]$auditEvents.Add($rec)
+                                }
+                            }
+                        }
+                    }
+                    catch {
+                        $c = Get-HttpStatusCode $_
+                        if ($ct -eq 'DLP.All' -and $c -in @(401, 403)) {
+                            $dlpStatus = 'PermissionMissing'
+                            $dlpDetail = "DLP.All icin ActivityFeed.ReadDlp izni eksik (HTTP $c)"
+                        }
+                    }
+                    $cursor = $sliceEnd
+                }
             }
         }
 
@@ -300,14 +422,15 @@ function Get-DlpActivityEvent {
                         try {
                             $cached = Get-Content $rawDlp -Raw -Encoding UTF8 | ConvertFrom-Json
                             foreach ($rec in @($cached)) {
+                                if (-not $rec) { continue }
                                 if ($rec.CreationTime) {
-                                    $ct = ([datetime]$rec.CreationTime).ToUniversalTime()
-                                    if ($ct -lt $startU -or $ct -ge $endU) { continue }
+                                    $ctTime = ([datetime]$rec.CreationTime).ToUniversalTime()
+                                    if ($ctTime -lt $startU -or $ctTime -ge $endU) { continue }
                                 }
                                 $rid = if ($rec.Id) { [string]$rec.Id } else { [guid]::NewGuid().ToString() }
                                 if (-not $seenIds.ContainsKey($rid)) {
                                     $seenIds[$rid] = $true
-                                    [void]$events.Add($rec)
+                                    [void]$dlpEvents.Add($rec)
                                 }
                             }
                         }
@@ -319,36 +442,44 @@ function Get-DlpActivityEvent {
             }
         }
 
-        if ($Mode -eq 'Monthly' -and $Start.ToUniversalTime() -lt $apiFloor) {
-            $status = 'Partial'
-            $detail = 'Office 365 Management Activity API canli olarak son 7 gunu verir; kalan gunler varsa haftalik arsivden birlestirildi.'
+        if ($enabledTypes.ContainsKey('DLP.All') -and $dlpStatus -ne 'PermissionMissing') {
+            $dlpStatus = if ($Mode -eq 'Monthly' -and $Start.ToUniversalTime() -lt $apiFloor) { 'Partial' } else { 'Available' }
+            $dlpDetail = "O365 Activity DLP.All ($($dlpEvents.Count) DLP olayi)"
         }
-        else {
-            $status = 'Available'
-            $detail = 'Office 365 Management Activity API (DLP.All)'
+        elseif ($dlpEvents.Count -gt 0) {
+            $dlpStatus = 'Available'
+            $dlpDetail = "Audit akislarindan $($dlpEvents.Count) DLP eslesmesi cikarildi"
+        }
+
+        $feedCount = @($activeFeeds | Where-Object { $_ -ne 'DLP.All' }).Count
+        if ($feedCount -gt 0) {
+            $auditStatus = 'Available'
+            $auditDetail = "Audit.General/SharePoint/Exchange ($($auditEvents.Count) denetim kaydi)"
         }
     }
     catch {
         $code = Get-HttpStatusCode $_
         $msg  = Get-HttpErrorBody $_
-        if ($code -eq 401 -or $code -eq 403) {
-            $status = 'PermissionMissing'
-            $detail = "ActivityFeed.Read izni eksik veya yayilmamis (HTTP $code)"
+        $auditStatus = if ($code -in @(401, 403)) { 'PermissionMissing' } else { 'Unavailable' }
+        $auditDetail = "HTTP $code - ActivityFeed.Read erisimi alinamadi"
+        if ($dlpStatus -eq 'Unavailable') {
+            $dlpStatus = $auditStatus
+            $dlpDetail = $auditDetail
         }
-        else {
-            $status = 'Unavailable'
-            $detail = "DLP.All alinamadi: $msg"
-        }
-        Write-Log "DLP.All uyarisi: $detail" 'WARN'
+        Write-Log "O365 Activity uyarisi: $msg" 'WARN'
     }
 
     return [pscustomobject]@{
-        Status = $status
-        Detail = $detail
-        Events = @($events)
+        DlpStatus   = $dlpStatus
+        DlpDetail   = $dlpDetail
+        DlpEvents   = @($dlpEvents.ToArray())
+        AuditStatus = $auditStatus
+        AuditDetail = $auditDetail
+        AuditEvents = @($auditEvents.ToArray())
     }
 }
 
+# -------------------------------------- Graph Purview Audit Log Queries -----
 function Get-PurviewAuditSummary {
     param(
         $Config,
@@ -372,7 +503,6 @@ function Get-PurviewAuditSummary {
         $eFilter = $End.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         $headers = @{ Authorization = "Bearer $GraphToken" }
 
-        # Once ayni donem icin mevcut bir sorgu var mi kontrol et (429 eszamanli sorgu sinirini onler)
         $queryId = ''
         $finalState = ''
         try {
@@ -381,7 +511,7 @@ function Get-PurviewAuditSummary {
                 $_.filterStartDateTime -and $_.filterEndDateTime -and
                 ([datetime]$_.filterStartDateTime).ToUniversalTime().ToString('yyyy-MM-dd') -eq $Start.ToUniversalTime().ToString('yyyy-MM-dd') -and
                 $_.status -in @('succeeded', 'running', 'notStarted')
-            }) | Select-Object -First 1
+            }) | Sort-Object { if ($_.status -eq 'succeeded') { 0 } else { 1 } } | Select-Object -First 1
             if ($match) {
                 $queryId    = [string]$match.id
                 $finalState = [string]$match.status
@@ -396,6 +526,13 @@ function Get-PurviewAuditSummary {
                 displayName         = "PurviewReport-$(Get-Date -Format 'yyyyMMddHHmmss')"
                 filterStartDateTime = $sFilter
                 filterEndDateTime   = $eFilter
+                operationFilters    = @(
+                    'DlpRuleMatch', 'DlpRuleUndo', 'SensitivityLabelApplied', 'SensitivityLabelUpdated',
+                    'SensitivityLabelRemoved', 'FileSensitivityLabelChanged', 'MipLabel', 'LabelApplied',
+                    'LabelChanged', 'LabelRemoved', 'FileCopiedToRemovableMedia', 'FileUploadedToCloud',
+                    'New-DlpCompliancePolicy', 'Set-DlpCompliancePolicy', 'New-DlpComplianceRule',
+                    'Set-DlpComplianceRule', 'New-Label', 'Set-Label', 'Set-LabelPolicy', 'AuditSearchCreated'
+                )
             } | ConvertTo-Json -Depth 5
 
             $created = Invoke-RestMethod -Method Post -Uri "$script:GraphResource/v1.0/security/auditLog/queries" `
@@ -456,6 +593,7 @@ function Get-PurviewAuditSummary {
     }
 }
 
+# ------------------------------------------------- Policy Snapshot + Labels -
 function Get-PolicySnapshotData {
     param(
         $Config,
@@ -471,55 +609,61 @@ function Get-PolicySnapshotData {
         $snapPath = Join-Path $script:Root $snapPath
     }
 
+    $snapObj = $null
+    $status  = 'SnapshotRequired'
+    $detail  = 'IPPS anlik goruntusu yok; Collect-PurviewPolicies.ps1 calistirin'
+
     if ($snapPath -and (Test-Path $snapPath)) {
         try {
-            $raw = Get-Content -Path $snapPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            return [pscustomobject]@{
-                Status   = 'Available'
-                Detail   = "IPPS anlik goruntusu ($([IO.Path]::GetFileName($snapPath)))"
-                Snapshot = $raw
-                IsBeta   = $false
-            }
+            $snapObj = Get-Content -Path $snapPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $status  = 'Available'
+            $detail  = "IPPS anlik goruntusu ($([IO.Path]::GetFileName($snapPath)))"
         }
         catch {
             Write-Log "IPPS anlik goruntusu okunamadi ($snapPath): $($_.Exception.Message)" 'WARN'
         }
     }
 
-    $useBeta = $false
-    if ($Config.Purview -and $Config.Purview.PSObject.Properties['EnableBetaLabelApi']) {
-        $useBeta = [bool]$Config.Purview.EnableBetaLabelApi
+    # Graph uzerinden canli Hassasiyet Etiketi tanimlarini tamamla
+    $graphLabels = @()
+    $labelSourceDetail = ''
+    if ($GraphToken) {
+        $gLblRes = Get-GraphSensitivityLabelInventory -GraphToken $GraphToken
+        if ($gLblRes.Status -eq 'Available' -and $gLblRes.Labels.Count -gt 0) {
+            $graphLabels = $gLblRes.Labels
+            $labelSourceDetail = $gLblRes.Detail
+        }
     }
 
-    if ($useBeta -and $GraphToken) {
-        try {
-            $labels = @(Invoke-PagedApi "$script:GraphResource/beta/security/dataSecurityAndGovernance/sensitivityLabels" $GraphToken 10)
-            $synth = [pscustomobject]@{
-                collectedAt                 = (Get-Date).ToUniversalTime().ToString('o')
-                dlpPolicies                 = @()
-                sensitivityLabelCount       = $labels.Count
-                sensitivityLabelPolicyCount = 0
-                retentionPolicyCount        = 0
-                insiderRiskPolicyCount      = 0
-                commCompliancePolicyCount   = 0
-            }
-            return [pscustomobject]@{
-                Status   = 'Beta'
-                Detail   = "Graph Beta sensitivityLabels ($($labels.Count) etiket)"
-                Snapshot = $synth
-                IsBeta   = $true
-            }
+    if ($snapObj) {
+        $hasSnapLabels = ($snapObj.PSObject.Properties['sensitivityLabels'] -and @($snapObj.sensitivityLabels).Count -gt 0)
+        if (-not $hasSnapLabels -and $graphLabels.Count -gt 0) {
+            $snapObj | Add-Member -NotePropertyName 'sensitivityLabels' -NotePropertyValue $graphLabels -Force
+            $snapObj | Add-Member -NotePropertyName 'sensitivityLabelCount' -NotePropertyValue $graphLabels.Count -Force
+            $detail = "$detail + $labelSourceDetail"
         }
-        catch {
-            Write-Log "Graph Beta etiket cagrisi basarisiz: $(Get-HttpErrorBody $_)" 'WARN'
+    }
+    elseif ($graphLabels.Count -gt 0) {
+        $snapObj = [pscustomobject]@{
+            collectedAt                 = (Get-Date).ToUniversalTime().ToString('o')
+            dlpPolicies                 = @()
+            dlpRules                    = @()
+            sensitivityLabels           = $graphLabels
+            sensitivityLabelCount       = $graphLabels.Count
+            sensitivityLabelPolicyCount = 0
+            retentionPolicyCount        = 0
+            insiderRiskPolicyCount      = 0
+            commCompliancePolicyCount   = 0
         }
+        $status = 'Beta'
+        $detail = $labelSourceDetail
     }
 
     return [pscustomobject]@{
-        Status   = 'SnapshotRequired'
-        Detail   = 'IPPS anlik goruntusu yok; Collect-PurviewPolicies.ps1 calistirin'
-        Snapshot = $null
-        IsBeta   = $false
+        Status      = $status
+        Detail      = $detail
+        Snapshot    = $snapObj
+        GraphLabels = $graphLabels
     }
 }
 
@@ -552,7 +696,7 @@ function Get-PurviewData {
     catch {
         $code = Get-HttpStatusCode $_
         $st = if ($code -in @(401, 403)) { 'PermissionMissing' } else { 'Unavailable' }
-        $sources['AlertsV2'] = [pscustomobject]@{ Name = 'Graph Security Alerts v2'; Status = $st; Detail = Get-HttpErrorBody $_ }
+        $sources['AlertsV2'] = [pscustomobject]@{ Name = 'Graph Security Alerts v2'; Status = $st; Detail = "HTTP $code - SecurityAlert.Read.All kontrol edin" }
         Write-Log "Security Alerts v2 alinamadi: $(Get-HttpErrorBody $_)" 'WARN'
     }
 
@@ -567,20 +711,21 @@ function Get-PurviewData {
     catch {
         $code = Get-HttpStatusCode $_
         $st = if ($code -in @(401, 403)) { 'PermissionMissing' } else { 'Unavailable' }
-        $sources['Incidents'] = [pscustomobject]@{ Name = 'Graph Security Incidents'; Status = $st; Detail = Get-HttpErrorBody $_ }
+        $sources['Incidents'] = [pscustomobject]@{ Name = 'Graph Security Incidents'; Status = $st; Detail = "HTTP $code - SecurityIncident.Read.All kontrol edin" }
         Write-Log "Security Incidents alinamadi: $(Get-HttpErrorBody $_)" 'WARN'
     }
 
-    # 3. Office 365 Management Activity API (DLP.All)
-    Write-Log 'Office 365 Management Activity API (DLP.All) kontrol ediliyor...'
-    $dlpRes = Get-DlpActivityEvent -Config $Config -Start $Start -End $End -Mode $Mode
-    Write-Log "  DLP.All durum: $($dlpRes.Status) ($($dlpRes.Events.Count) olay)"
-    $sources['DlpActivity'] = [pscustomobject]@{ Name = 'O365 Activity API (DLP.All)'; Status = $dlpRes.Status; Detail = $dlpRes.Detail }
+    # 3. Office 365 Management Activity API (DLP.All + Audit.General/SharePoint/Exchange)
+    Write-Log 'Office 365 Management Activity API (DLP + Audit) kontrol ediliyor...'
+    $o365Res = Get-O365ActivityTelemetry -Config $Config -Start $Start -End $End -Mode $Mode
+    Write-Log "  DLP.All durum: $($o365Res.DlpStatus) ($($o365Res.DlpEvents.Count) DLP olayi) | Audit: $($o365Res.AuditStatus) ($($o365Res.AuditEvents.Count) kayit)"
+    $sources['DlpActivity']   = [pscustomobject]@{ Name = 'O365 Activity API (DLP.All)'; Status = $o365Res.DlpStatus; Detail = $o365Res.DlpDetail }
+    $sources['O365AuditFeed'] = [pscustomobject]@{ Name = 'O365 Activity API (Audit Akislari)'; Status = $o365Res.AuditStatus; Detail = $o365Res.AuditDetail }
 
     # 4. Graph Purview Audit Log Queries
     Write-Log 'Graph Purview Audit sorgusu calistiriliyor...'
     $auditRes = Get-PurviewAuditSummary -Config $Config -GraphToken $graphTok -Start $Start -End $End
-    Write-Log "  Audit durum: $($auditRes.Status) ($($auditRes.Records.Count) kayit)"
+    Write-Log "  Graph Audit durum: $($auditRes.Status) ($($auditRes.Records.Count) kayit)"
     $sources['AuditLog'] = [pscustomobject]@{ Name = 'Graph Audit Log Queries'; Status = $auditRes.Status; Detail = $auditRes.Detail }
 
     # 5. Graph eDiscovery Cases
@@ -604,17 +749,22 @@ function Get-PurviewData {
         Write-Log "eDiscovery erisimi ($st): $msg" 'WARN'
     }
 
-    # 6. IPPS Politika Anlik Goruntusu
-    Write-Log 'Purview IPPS politika envanteri yukleniyor...'
+    # 6. IPPS Politika Anlik Goruntusu + Graph Hassasiyet Etiketleri
+    Write-Log 'Purview IPPS politika ve Hassasiyet Etiketi envanteri yukleniyor...'
     $polRes = Get-PolicySnapshotData -Config $Config -GraphToken $graphTok -OverridePath $PolicySnapshotOverride
-    Write-Log "  Politika envanteri: $($polRes.Status)"
-    $sources['Policies'] = [pscustomobject]@{ Name = 'Purview IPPS Politikalari'; Status = $polRes.Status; Detail = $polRes.Detail }
+    Write-Log "  Politika ve Etiket envanteri: $($polRes.Status) ($($polRes.Detail))"
+    $sources['Policies'] = [pscustomobject]@{ Name = 'Purview Politika & Etiket Envanteri'; Status = $polRes.Status; Detail = $polRes.Detail }
+
+    # O365 AuditEvents ve Graph AuditRecords birlestir
+    $combinedAudit = New-Object System.Collections.ArrayList
+    foreach ($a in @($o365Res.AuditEvents)) { [void]$combinedAudit.Add($a) }
+    foreach ($g in @($auditRes.Records))    { [void]$combinedAudit.Add($g) }
 
     return [pscustomobject]@{
         AlertsAll       = $alertsAll
         Incidents       = $incidents
-        DlpEvents       = $dlpRes.Events
-        AuditRecords    = $auditRes.Records
+        DlpEvents       = $o365Res.DlpEvents
+        AuditRecords    = @($combinedAudit.ToArray())
         EDiscoveryCases = $ediscoveryCases
         PolicySnapshot  = $polRes.Snapshot
         Sources         = $sources
@@ -628,34 +778,57 @@ function Get-PurviewData {
 function New-PurviewKpi {
     param($Data, $Config)
 
-    $alertsAll = @($Data.AlertsAll)
+    $alertsAll     = @($Data.AlertsAll)
     $purviewAlerts = @($alertsAll | Where-Object { Test-IsPurviewRelatedAlert $_ })
-    $incidents = @($Data.Incidents)
-    $dlpEvents = @($Data.DlpEvents)
-    $auditRecs = @($Data.AuditRecords)
-    $cases     = @($Data.EDiscoveryCases)
-    $snap      = $Data.PolicySnapshot
-    $sources   = $Data.Sources
-    $th        = if ($Config -and $Config.PSObject.Properties['Thresholds']) { $Config.Thresholds } else { $null }
+    $incidents     = @($Data.Incidents)
+    $dlpEvents     = @($Data.DlpEvents)
+    $auditRecs     = @($Data.AuditRecords)
+    $cases         = @($Data.EDiscoveryCases)
+    $snap          = $Data.PolicySnapshot
+    $sources       = $Data.Sources
+    $th            = if ($Config -and $Config.PSObject.Properties['Thresholds']) { $Config.Thresholds } else { $null }
 
-    $dlpPolicies = @()
-    $labelCount = 0
-    $labelPolCount = 0
-    $retPolCount = 0
-    $irPolCount = 0
-    $commPolCount = 0
+    $dlpPolicies     = @()
+    $dlpRules        = @()
+    $labels          = @()
+    $labelPolicies   = @()
+    $labelCount      = 0
+    $labelActiveCnt  = 0
+    $labelPolCount   = 0
+    $autoLblPolCount = 0
+    $retPolCount     = 0
+    $retLblCount     = 0
+    $irPolCount      = 0
+    $commPolCount    = 0
     $snapCollectedAt = ''
 
     if ($snap) {
-        if ($snap.PSObject.Properties['dlpPolicies'] -and $snap.dlpPolicies) {
-            $dlpPolicies = @($snap.dlpPolicies)
+        if ($snap.PSObject.Properties['dlpPolicies'] -and $snap.dlpPolicies)                 { $dlpPolicies     = @($snap.dlpPolicies) }
+        if ($snap.PSObject.Properties['dlpRules'] -and $snap.dlpRules)                       { $dlpRules        = @($snap.dlpRules) }
+        if ($snap.PSObject.Properties['sensitivityLabels'] -and $snap.sensitivityLabels)     { $labels          = @($snap.sensitivityLabels) }
+        if ($snap.PSObject.Properties['sensitivityLabelPolicies'] -and $snap.sensitivityLabelPolicies) { $labelPolicies = @($snap.sensitivityLabelPolicies) }
+        if ($snap.PSObject.Properties['sensitivityLabelCount'])                              { $labelCount      = [int]$snap.sensitivityLabelCount }
+        if ($snap.PSObject.Properties['sensitivityLabelPolicyCount'])                        { $labelPolCount   = [int]$snap.sensitivityLabelPolicyCount }
+        if ($snap.PSObject.Properties['autoLabelPolicyCount'])                               { $autoLblPolCount = [int]$snap.autoLabelPolicyCount }
+        if ($snap.PSObject.Properties['retentionPolicyCount'])                               { $retPolCount     = [int]$snap.retentionPolicyCount }
+        if ($snap.PSObject.Properties['retentionLabelCount'])                                { $retLblCount     = [int]$snap.retentionLabelCount }
+        if ($snap.PSObject.Properties['insiderRiskPolicyCount'])                             { $irPolCount      = [int]$snap.insiderRiskPolicyCount }
+        if ($snap.PSObject.Properties['commCompliancePolicyCount'])                          { $commPolCount    = [int]$snap.commCompliancePolicyCount }
+        if ($snap.PSObject.Properties['collectedAt'])                                        { $snapCollectedAt = [string]$snap.collectedAt }
+        if ($snap.PSObject.Properties['activityRecords'] -and $snap.activityRecords) {
+            foreach ($ar in @($snap.activityRecords)) { $auditRecs += $ar }
         }
-        if ($snap.PSObject.Properties['sensitivityLabelCount'])       { $labelCount    = [int]$snap.sensitivityLabelCount }
-        if ($snap.PSObject.Properties['sensitivityLabelPolicyCount']) { $labelPolCount = [int]$snap.sensitivityLabelPolicyCount }
-        if ($snap.PSObject.Properties['retentionPolicyCount'])        { $retPolCount   = [int]$snap.retentionPolicyCount }
-        if ($snap.PSObject.Properties['insiderRiskPolicyCount'])      { $irPolCount    = [int]$snap.insiderRiskPolicyCount }
-        if ($snap.PSObject.Properties['commCompliancePolicyCount'])   { $commPolCount  = [int]$snap.commCompliancePolicyCount }
-        if ($snap.PSObject.Properties['collectedAt'])                 { $snapCollectedAt = [string]$snap.collectedAt }
+    }
+
+    if ($labels.Count -gt 0 -and $labelCount -eq 0) { $labelCount = $labels.Count }
+    $labelActiveCnt = @($labels | Where-Object { $_.isActive -ne $false }).Count
+
+    # Etiket ID -> Görünen Ad sözlüğü
+    $labelLookup = @{}
+    foreach ($l in $labels) {
+        $disp = if ($l.displayName) { [string]$l.displayName } else { [string]$l.name }
+        if ($l.id)   { $labelLookup[[string]$l.id.ToLowerInvariant()]   = $disp }
+        if ($l.name) { $labelLookup[[string]$l.name.ToLowerInvariant()] = $disp }
     }
 
     $dlpEnforce  = @($dlpPolicies | Where-Object { $_.mode -eq 'Enforce' }).Count
@@ -696,27 +869,319 @@ function New-PurviewKpi {
         $cls[$n] = $g.Count
     }
 
-    # DLP olay ozetleri (O365 Activity API)
-    $dlpHigh = @($dlpEvents | Where-Object { "$($_.Severity)" -match 'High' -or "$($_.PolicyMatchInfo.Severity)" -match 'High' }).Count
-    $dlpPolicyHits = [ordered]@{}
-    $dlpWorkloadHits = [ordered]@{}
-    foreach ($ev in $dlpEvents) {
-        $pName = $null
-        if ($ev.PSObject.Properties['PolicyDetails'] -and $ev.PolicyDetails) {
-            $pName = @($ev.PolicyDetails)[0].PolicyName
+    # Audit kayitlarindaki ek DLP ve Etiket olaylarini ayristir
+    $allDlpRecords = New-Object System.Collections.ArrayList
+    foreach ($e in $dlpEvents) { [void]$allDlpRecords.Add($e) }
+
+    $labelAppliedCount    = 0
+    $labelChangedCount    = 0
+    $labelRemovedCount    = 0
+    $labelAutoCount       = 0
+    $labelUsageByName     = @{}
+    $labelUsageByWorkload = [ordered]@{}
+    $labelUsageByUser     = @{}
+
+    $auditByWorkload   = [ordered]@{}
+    $auditByOperation  = @{}
+    $auditByActor      = @{}
+    $auditPurviewCount = 0
+
+    foreach ($rec in $auditRecs) {
+        if (-not $rec) { continue }
+        $payload = $rec
+        if ($rec.PSObject.Properties['auditData'] -and $rec.auditData) {
+            if ($rec.auditData -is [string]) {
+                try { $payload = $rec.auditData | ConvertFrom-Json } catch { $payload = $rec }
+            }
+            else { $payload = $rec.auditData }
         }
-        if (-not $pName -and $ev.PSObject.Properties['PolicyName']) { $pName = $ev.PolicyName }
-        if (-not $pName) { $pName = 'Bilinmeyen Politika' }
-        if (-not $dlpPolicyHits.Contains($pName)) { $dlpPolicyHits[$pName] = 0 }
+
+        $op = if ($rec.PSObject.Properties['Operation'] -and $rec.Operation) { [string]$rec.Operation }
+              elseif ($rec.PSObject.Properties['operation'] -and $rec.operation) { [string]$rec.operation }
+              elseif ($payload.PSObject.Properties['Operation']) { [string]$payload.Operation }
+              elseif ($payload.PSObject.Properties['Activity']) { [string]$payload.Activity }
+              else { 'Bilinmiyor' }
+
+        $rawWl = if ($rec.PSObject.Properties['Workload'] -and $rec.Workload) { [string]$rec.Workload }
+                 elseif ($rec.PSObject.Properties['service'] -and $rec.service) { [string]$rec.service }
+                 elseif ($payload.PSObject.Properties['Workload']) { [string]$payload.Workload }
+                 else { 'Diğer' }
+        $wl = ConvertTo-NormalizedWorkload $rawWl
+
+        $actor = if ($rec.PSObject.Properties['UserId'] -and $rec.UserId) { [string]$rec.UserId }
+                 elseif ($rec.PSObject.Properties['userPrincipalName'] -and $rec.userPrincipalName) { [string]$rec.userPrincipalName }
+                 elseif ($payload.PSObject.Properties['UserId']) { [string]$payload.UserId }
+                 elseif ($payload.PSObject.Properties['User']) { [string]$payload.User }
+                 else { '' }
+
+        if (-not $auditByWorkload.Contains($wl)) { $auditByWorkload[$wl] = 0 }
+        $auditByWorkload[$wl] = [int]$auditByWorkload[$wl] + 1
+
+        if ($op -notlike 'Get-*') {
+            if (-not $auditByOperation.ContainsKey($op)) { $auditByOperation[$op] = 0 }
+            $auditByOperation[$op] = [int]$auditByOperation[$op] + 1
+
+            if ($actor -and $actor -notmatch '^NT SERVICE|MSExchangeAdminApi|SHAREPOINT\\system|Not Available') {
+                if (-not $auditByActor.ContainsKey($actor)) { $auditByActor[$actor] = 0 }
+                $auditByActor[$actor] = [int]$auditByActor[$actor] + 1
+            }
+        }
+
+        if ("$op $rawWl" -match 'Dlp|Label|Sensitivity|Compliance|Purview|Insider|Retention|eDiscovery|Mip') {
+            $auditPurviewCount++
+        }
+
+        # Hassasiyet Etiketi Kullanim Ayristirma (Admin Get-* sorgularini haric tut)
+        if ($op -notlike 'Get-*' -and $op -match '^(SensitivityLabelApplied|SensitivityLabelUpdated|SensitivityLabelRemoved|FileSensitivityLabelChanged|MipLabel|LabelApplied|LabelChanged|LabelRemoved|LabelDowngraded)$') {
+            $rawLblId = ''
+            if ($payload.PSObject.Properties['SensitivityLabelEventData'] -and $payload.SensitivityLabelEventData) {
+                $rawLblId = [string]$payload.SensitivityLabelEventData.SensitivityLabelId
+            }
+            if (-not $rawLblId -and $payload.PSObject.Properties['SensitivityLabelId']) { $rawLblId = [string]$payload.SensitivityLabelId }
+            if (-not $rawLblId -and $payload.PSObject.Properties['LabelId'])            { $rawLblId = [string]$payload.LabelId }
+            if (-not $rawLblId -and $payload.PSObject.Properties['Label'])              { $rawLblId = [string]$payload.Label }
+
+            $lblName = 'Genel / Bilinmeyen Etiket'
+            if ($rawLblId) {
+                $kId = $rawLblId.Trim().ToLowerInvariant()
+                $lblName = if ($labelLookup.ContainsKey($kId)) { $labelLookup[$kId] } else { $rawLblId }
+            }
+
+            if (-not $labelUsageByName.ContainsKey($lblName)) {
+                $labelUsageByName[$lblName] = @{ Applied = 0; Changed = 0; Removed = 0; Total = 0 }
+            }
+
+            if ($op -match 'Removed') {
+                $labelRemovedCount++
+                $labelUsageByName[$lblName].Removed++
+            }
+            elseif ($op -match 'Updated|Changed|Downgraded') {
+                $labelChangedCount++
+                $labelUsageByName[$lblName].Changed++
+            }
+            else {
+                $labelAppliedCount++
+                $labelUsageByName[$lblName].Applied++
+            }
+            $labelUsageByName[$lblName].Total++
+
+            if ($payload.PSObject.Properties['ActionSource'] -and "$($payload.ActionSource)" -match 'Auto|Default|Recommended') {
+                $labelAutoCount++
+            }
+
+            if (-not $labelUsageByWorkload.Contains($wl)) { $labelUsageByWorkload[$wl] = 0 }
+            $labelUsageByWorkload[$wl] = [int]$labelUsageByWorkload[$wl] + 1
+
+            $uKey = if ($actor) { $actor } else { 'Sistem / Otomatik' }
+            if (-not $labelUsageByUser.ContainsKey($uKey)) {
+                $labelUsageByUser[$uKey] = @{ Applied = 0; Changed = 0; Removed = 0; Total = 0; Workload = $wl }
+            }
+            if ($op -match 'Removed') { $labelUsageByUser[$uKey].Removed++ }
+            elseif ($op -match 'Updated|Changed|Downgraded') { $labelUsageByUser[$uKey].Changed++ }
+            else { $labelUsageByUser[$uKey].Applied++ }
+            $labelUsageByUser[$uKey].Total++
+        }
+    }
+
+    # DLP Derin Analiz (Politika, Kural, SIT, Kullanici, Override, Is Yuku)
+    $dlpHigh          = 0
+    $dlpBlockedCount  = 0
+    $dlpOverrideCount = 0
+    $dlpNotifyCount   = 0
+    $dlpAuditCount    = 0
+    $dlpPolicyHits    = @{}
+    $dlpRuleHits      = @{}
+    $dlpSitHits       = @{}
+    $dlpUserStats     = @{}
+    $dlpWorkloadHits  = [ordered]@{}
+
+    foreach ($ev in $allDlpRecords) {
+        if (-not $ev) { continue }
+        $pName = 'Genel DLP Politikası'
+        $rName = 'Varsayılan Kural'
+        $sev   = if ($ev.PSObject.Properties['Severity'] -and $ev.Severity) { [string]$ev.Severity } else { 'Medium' }
+        $act   = 'Audit'
+        $isOverride = $false
+        $justText   = ''
+
+        if ($ev.PSObject.Properties['ExceptionInfo'] -and -not [string]::IsNullOrWhiteSpace([string]$ev.ExceptionInfo)) {
+            $isOverride = $true
+            $justText   = [string]$ev.ExceptionInfo
+        }
+        if ($ev.PSObject.Properties['EndpointMetaData'] -and $ev.EndpointMetaData) {
+            if ($ev.EndpointMetaData.Justification) {
+                $isOverride = $true
+                $justText   = [string]$ev.EndpointMetaData.Justification
+            }
+            if ($ev.EndpointMetaData.EnforcementMode -eq 'Block' -and -not $isOverride) {
+                $act = 'Block'
+            }
+        }
+
+        $sitsInEvent = New-Object System.Collections.ArrayList
+
+        if ($ev.PSObject.Properties['PolicyDetails'] -and $ev.PolicyDetails) {
+            $pd = @($ev.PolicyDetails)[0]
+            if ($pd.PolicyName) { $pName = [string]$pd.PolicyName }
+            if ($pd.PSObject.Properties['Rules'] -and $pd.Rules) {
+                $rl = @($pd.Rules)[0]
+                if ($rl.RuleName) { $rName = [string]$rl.RuleName }
+                if ($rl.Severity) { $sev   = [string]$rl.Severity }
+                if ($rl.PSObject.Properties['OverriddenActions'] -and @($rl.OverriddenActions).Count -gt 0) {
+                    $isOverride = $true
+                }
+                $rawActs = (@($rl.Actions) -join ' ')
+                if ($isOverride) { $act = 'Override' }
+                elseif ($rawActs -match 'Block|Restrict|Reject|Quarantine') { $act = 'Block' }
+                elseif ($rawActs -match 'Notify|Warn') { $act = 'Notify' }
+
+                if ($rl.PSObject.Properties['ConditionsMatched'] -and $rl.ConditionsMatched -and $rl.ConditionsMatched.SensitiveInformation) {
+                    foreach ($si in @($rl.ConditionsMatched.SensitiveInformation)) {
+                        $sName = if ($si.SensitiveInfoTypeName) { [string]$si.SensitiveInfoTypeName }
+                                 elseif ($si.SensitiveInformationTypeName) { [string]$si.SensitiveInformationTypeName }
+                                 else { 'Hassas Veri (SIT)' }
+                        $sCnt  = if ($si.Count) { [int]$si.Count } else { 1 }
+                        [void]$sitsInEvent.Add([pscustomobject]@{ Name = $sName; Count = $sCnt })
+                    }
+                }
+            }
+        }
+        elseif ($ev.PSObject.Properties['PolicyName'] -and $ev.PolicyName) {
+            $pName = [string]$ev.PolicyName
+        }
+
+        if ($sitsInEvent.Count -eq 0 -and $ev.PSObject.Properties['SensitiveInfoTypeData'] -and $ev.SensitiveInfoTypeData) {
+            foreach ($si in @($ev.SensitiveInfoTypeData)) {
+                $sName = if ($si.SensitiveInfoTypeName) { [string]$si.SensitiveInfoTypeName } else { 'Hassas Veri (SIT)' }
+                $sCnt  = if ($si.Count) { [int]$si.Count } else { 1 }
+                [void]$sitsInEvent.Add([pscustomobject]@{ Name = $sName; Count = $sCnt })
+            }
+        }
+
+        if ($isOverride) { $act = 'Override'; $dlpOverrideCount++ }
+        elseif ($act -eq 'Block') { $dlpBlockedCount++ }
+        elseif ($act -eq 'Notify') { $dlpNotifyCount++ }
+        else { $dlpAuditCount++ }
+
+        $isHigh = ($sev -match 'High')
+        if ($isHigh) { $dlpHigh++ }
+
+        if (-not $dlpPolicyHits.ContainsKey($pName)) { $dlpPolicyHits[$pName] = 0 }
         $dlpPolicyHits[$pName] = [int]$dlpPolicyHits[$pName] + 1
 
-        $wl = if ($ev.PSObject.Properties['Workload'] -and $ev.Workload) { [string]$ev.Workload } else { 'Diger' }
+        $ruleKey = "$pName|$rName"
+        if (-not $dlpRuleHits.ContainsKey($ruleKey)) {
+            $dlpRuleHits[$ruleKey] = @{ Policy = $pName; Rule = $rName; Severity = $sev; Action = $act; Count = 0; Overrides = 0 }
+        }
+        $dlpRuleHits[$ruleKey].Count++
+        if ($isOverride) { $dlpRuleHits[$ruleKey].Overrides++ }
+
+        $evSitInstances = 0
+        foreach ($sItem in $sitsInEvent) {
+            if (-not $dlpSitHits.ContainsKey($sItem.Name)) {
+                $dlpSitHits[$sItem.Name] = @{ Events = 0; Instances = 0 }
+            }
+            $dlpSitHits[$sItem.Name].Events++
+            $dlpSitHits[$sItem.Name].Instances += [int]$sItem.Count
+            $evSitInstances += [int]$sItem.Count
+        }
+
+        $rawWl = if ($ev.PSObject.Properties['Workload'] -and $ev.Workload) { [string]$ev.Workload } else { 'Exchange' }
+        $wl = ConvertTo-NormalizedWorkload $rawWl
         if (-not $dlpWorkloadHits.Contains($wl)) { $dlpWorkloadHits[$wl] = 0 }
         $dlpWorkloadHits[$wl] = [int]$dlpWorkloadHits[$wl] + 1
+
+        $uId = if ($ev.PSObject.Properties['UserId'] -and $ev.UserId) { [string]$ev.UserId }
+               elseif ($ev.PSObject.Properties['ExchangeMetaData'] -and $ev.ExchangeMetaData -and $ev.ExchangeMetaData.From) { [string]$ev.ExchangeMetaData.From }
+               elseif ($ev.PSObject.Properties['SharePointMetaData'] -and $ev.SharePointMetaData -and $ev.SharePointMetaData.FileOwner) { [string]$ev.SharePointMetaData.FileOwner }
+               else { 'bilinmeyen@kurum.local' }
+
+        if (-not $dlpUserStats.ContainsKey($uId)) {
+            $dlpUserStats[$uId] = @{
+                TotalHits     = 0
+                HighHits      = 0
+                Overrides     = 0
+                Blocked       = 0
+                SitInstances  = 0
+                Workloads     = New-Object System.Collections.ArrayList
+                Justification = ''
+            }
+        }
+        $dlpUserStats[$uId].TotalHits++
+        if ($isHigh)            { $dlpUserStats[$uId].HighHits++ }
+        if ($isOverride)        { $dlpUserStats[$uId].Overrides++ }
+        if ($act -eq 'Block')   { $dlpUserStats[$uId].Blocked++ }
+        $dlpUserStats[$uId].SitInstances += $evSitInstances
+        if ($dlpUserStats[$uId].Workloads -notcontains $wl) { [void]$dlpUserStats[$uId].Workloads.Add($wl) }
+        if ($justText -and -not $dlpUserStats[$uId].Justification) { $dlpUserStats[$uId].Justification = $justText }
     }
 
     $topDlpPolicies = @($dlpPolicyHits.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 8 |
         ForEach-Object { [pscustomobject]@{ Politika = $_.Key; Adet = $_.Value } })
+
+    $topDlpRules = @($dlpRuleHits.GetEnumerator() | Sort-Object { $_.Value.Count } -Descending | Select-Object -First 8 |
+        ForEach-Object {
+            [pscustomobject]@{
+                Politika  = $_.Value.Policy
+                Kural     = $_.Value.Rule
+                Siddet    = $_.Value.Severity
+                Aksiyon   = $_.Value.Action
+                Adet      = $_.Value.Count
+                Override  = $_.Value.Overrides
+            }
+        })
+
+    $topDlpSits = @($dlpSitHits.GetEnumerator() | Sort-Object { $_.Value.Instances } -Descending | Select-Object -First 8 |
+        ForEach-Object {
+            [pscustomobject]@{
+                HassasBilgiTuru = $_.Key
+                OlaySayisi      = $_.Value.Events
+                OrnekSayisi     = $_.Value.Instances
+            }
+        })
+
+    $topDlpUsers = @($dlpUserStats.GetEnumerator() | Sort-Object { $_.Value.TotalHits } -Descending | Select-Object -First 8 |
+        ForEach-Object {
+            [pscustomobject]@{
+                Kullanici    = $_.Key
+                ToplamOlay   = $_.Value.TotalHits
+                YuksekSiddet = $_.Value.HighHits
+                Engellenen   = $_.Value.Blocked
+                Override     = $_.Value.Overrides
+                HassasOrnek  = $_.Value.SitInstances
+                IsYukleri    = ($_.Value.Workloads -join ', ')
+                Gerekce      = $_.Value.Justification
+            }
+        })
+
+    $topLabelUsage = @($labelUsageByName.GetEnumerator() | Sort-Object { $_.Value.Total } -Descending | Select-Object -First 8 |
+        ForEach-Object {
+            [pscustomobject]@{
+                Etiket   = $_.Key
+                Uygulama = $_.Value.Applied
+                Degisim  = $_.Value.Changed
+                Silme    = $_.Value.Removed
+                Toplam   = $_.Value.Total
+            }
+        })
+
+    $topLabelUsers = @($labelUsageByUser.GetEnumerator() | Sort-Object { $_.Value.Total } -Descending | Select-Object -First 8 |
+        ForEach-Object {
+            [pscustomobject]@{
+                Kullanici = $_.Key
+                Uygulama  = $_.Value.Applied
+                Degisim   = $_.Value.Changed
+                Silme     = $_.Value.Removed
+                Toplam    = $_.Value.Total
+                IsYuku    = $_.Value.Workload
+            }
+        })
+
+    $topAuditOperations = @($auditByOperation.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 8 |
+        ForEach-Object { [pscustomobject]@{ Operasyon = $_.Key; Adet = $_.Value } })
+
+    $topAuditActors = @($auditByActor.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 6 |
+        ForEach-Object { [pscustomobject]@{ Kullanici = $_.Key; Adet = $_.Value } })
 
     $topAlerts = @($alertSourceSet | Sort-Object createdDateTime -Descending | Select-Object -First 10 |
         ForEach-Object {
@@ -729,24 +1194,23 @@ function New-PurviewKpi {
             }
         })
 
-    $auditPurviewCount = @($auditRecs | Where-Object {
-        "$($_.operation) $($_.service)" -match 'Dlp|Label|Sensitivity|Compliance|Purview|Insider|Retention|eDiscovery'
-    }).Count
-
     # Otomatik yonetim onerileri
     $recs = New-Object System.Collections.ArrayList
     $testLimit = if ($th -and $th.PSObject.Properties['TestModeDlpPolicies']) { [int]$th.TestModeDlpPolicies } else { 1 }
     if ($dlpTest -ge $testLimit -and $dlpTest -gt 0) {
         [void]$recs.Add("Test kipindeki $dlpTest DLP politikasini yanlis pozitif dogrulamasi sonrasi Enforce kipine gecirin.")
     }
-    if ($sources -and $sources['Policies'] -and $sources['Policies'].Status -eq 'SnapshotRequired') {
-        [void]$recs.Add('IPPS politika envanteri icin Collect-PurviewPolicies.ps1 gorevini zamanlayin.')
+    if ($dlpOverrideCount -gt 0) {
+        [void]$recs.Add("Donem icinde kullanicilar tarafindan $dlpOverrideCount kez DLP kurali gerekce girilerek asilmistir (Override); gerekce metinlerini denetleyin.")
+    }
+    if ($labelRemovedCount -gt 0 -or $labelChangedCount -gt 0) {
+        [void]$recs.Add("$labelChangedCount etiket degisimi/dusurmesi ve $labelRemovedCount etiket kaldirma islemi kaydedilmistir; kritik verilerde etiket dusurme gerekcelerini inceleyin.")
     }
     if ($retPolCount -eq 0 -and $snap) {
         [void]$recs.Add('Aktif Veri Saklama (Retention) politikasi bulunmuyor; kritik M365 is yukleri icin yasam dongusu politikasi tanimlayin.')
     }
     if ($sources -and $sources['DlpActivity'] -and $sources['DlpActivity'].Status -eq 'PermissionMissing') {
-        [void]$recs.Add('Office 365 Management API ActivityFeed.Read yetkisinin yonetici onayini dogrulayin.')
+        [void]$recs.Add('Canli DLP.All olay akisi icin Office 365 Management API uzerinde ActivityFeed.ReadDlp uygulama iznine yonetici onayi verin.')
     }
     if ($openInc.Count -gt 0) {
         [void]$recs.Add("Acik durumdaki $($openInc.Count) guvenlik olayini analist atamasi ile sonuclandirin.")
@@ -779,18 +1243,42 @@ function New-PurviewKpi {
         DlpPolicyEnforce          = $dlpEnforce
         DlpPolicyTest             = $dlpTest
         DlpPolicyDisabled         = $dlpDisabled
+        DlpRuleTotal              = $dlpRules.Count
         DlpPolicies               = @($dlpPolicies)
+        DlpRules                  = @($dlpRules)
         DlpWorkloadScope          = $workloadCounts
+
+        SensitivityLabels         = @($labels)
         SensitivityLabelCount     = $labelCount
+        SensitivityLabelActive    = $labelActiveCnt
         SensitivityLabelPolicies  = $labelPolCount
+        SensitivityLabelPolicyList= @($labelPolicies)
+        AutoLabelPolicies         = $autoLblPolCount
+        LabelEventsTotal          = ($labelAppliedCount + $labelChangedCount + $labelRemovedCount)
+        LabelAppliedCount         = $labelAppliedCount
+        LabelChangedCount         = $labelChangedCount
+        LabelRemovedCount         = $labelRemovedCount
+        LabelAutoCount            = $labelAutoCount
+        TopLabelUsage             = $topLabelUsage
+        TopLabelUsers             = $topLabelUsers
+        LabelWorkloadHits         = $labelUsageByWorkload
+
         RetentionPolicies         = $retPolCount
+        RetentionLabels           = $retLblCount
         InsiderRiskPolicies       = $irPolCount
         CommCompliancePolicies    = $commPolCount
         SnapshotCollectedAt       = $snapCollectedAt
 
-        DlpEventsTotal            = $dlpEvents.Count
+        DlpEventsTotal            = $allDlpRecords.Count
         DlpEventsHigh             = $dlpHigh
+        DlpBlockedCount           = $dlpBlockedCount
+        DlpOverrideCount          = $dlpOverrideCount
+        DlpNotifyCount            = $dlpNotifyCount
+        DlpAuditCount             = $dlpAuditCount
         TopDlpPolicies            = $topDlpPolicies
+        TopDlpRules               = $topDlpRules
+        TopDlpSits                = $topDlpSits
+        TopDlpUsers               = $topDlpUsers
         DlpWorkloadHits           = $dlpWorkloadHits
 
         TotalAlertsM365           = $alertsAll.Count
@@ -811,6 +1299,10 @@ function New-PurviewKpi {
 
         AuditRecordsTotal         = $auditRecs.Count
         AuditPurviewEvents        = $auditPurviewCount
+        AuditWorkloadBreakdown    = $auditByWorkload
+        TopAuditOperations        = $topAuditOperations
+        TopAuditActors            = $topAuditActors
+
         EDiscoveryCasesTotal      = $cases.Count
         EDiscoveryCasesOpen       = @($cases | Where-Object { $_.status -eq 'active' }).Count
 
@@ -819,6 +1311,155 @@ function New-PurviewKpi {
     }
 
     return [pscustomobject]$k
+}
+
+# ------------------------------------------- Kurumsal Ornek Veri Uretici ----
+function New-PurviewSampleData {
+    param(
+        [datetime]$Start,
+        [datetime]$End,
+        [ValidateSet('Weekly', 'Monthly')][string]$Mode = 'Monthly'
+    )
+
+    $labels = @(
+        [pscustomobject]@{ id = 'defa4170-0d19-0005-0000-bc88714345d2'; name = 'Personal'; displayName = 'Personal'; parentName = ''; priority = 0; encryptionEnabled = $false; markingEnabled = $false; contentType = 'File, Email'; tooltip = 'Kişisel hassas olmayan içerik'; isActive = $true }
+        [pscustomobject]@{ id = 'defa4170-0d19-0005-0001-bc88714345d2'; name = 'Public'; displayName = 'Public'; parentName = ''; priority = 1; encryptionEnabled = $false; markingEnabled = $false; contentType = 'File, Email, Site'; tooltip = 'Kamuya açık kurumsal yayınlar'; isActive = $true }
+        [pscustomobject]@{ id = 'defa4170-0d19-0005-0004-bc88714345d2'; name = 'All Employees (unrestricted)'; displayName = 'General / All Employees'; parentName = 'General'; priority = 2; encryptionEnabled = $false; markingEnabled = $false; contentType = 'File, Email, Site'; tooltip = 'Tüm kurum çalışanlarına açık genel veri'; isActive = $true }
+        [pscustomobject]@{ id = 'defa4170-0d19-0005-0007-bc88714345d2'; name = 'All Employees'; displayName = 'Confidential / All Employees'; parentName = 'Confidential'; priority = 5; encryptionEnabled = $true; markingEnabled = $true; contentType = 'File, Email, Site'; tooltip = 'Kurum içi gizli veri (şifreli ve filigranlı)'; isActive = $true }
+        [pscustomobject]@{ id = 'defa4170-0d19-0005-0008-bc88714345d2'; name = 'Trusted People'; displayName = 'Confidential / Trusted People'; parentName = 'Confidential'; priority = 6; encryptionEnabled = $true; markingEnabled = $true; contentType = 'File, Email'; tooltip = 'Yalnızca yetkilendirilmiş iş ortakları'; isActive = $true }
+        [pscustomobject]@{ id = 'defa4170-0d19-0005-000a-bc88714345d2'; name = 'All Employees'; displayName = 'Highly Confidential / All Employees'; parentName = 'Highly Confidential'; priority = 9; encryptionEnabled = $true; markingEnabled = $true; contentType = 'File, Email'; tooltip = 'Yüksek gizlilikli kurumsal sır'; isActive = $true }
+        [pscustomobject]@{ id = 'defa4170-0d19-0005-000b-bc88714345d2'; name = 'Specific People'; displayName = 'Highly Confidential / Specific People'; parentName = 'Highly Confidential'; priority = 10; encryptionEnabled = $true; markingEnabled = $true; contentType = 'File, Email'; tooltip = 'Yalnızca adlandırılmış kişilere özel şifreleme'; isActive = $true }
+        [pscustomobject]@{ id = '78b75aa9-787a-4ae4-b151-de2310a6217f'; name = 'RECETE'; displayName = 'RECETE (Kritik Veri)'; parentName = ''; priority = 12; encryptionEnabled = $true; markingEnabled = $true; contentType = 'File, Email, Endpoint'; tooltip = 'Bu etiket, kritik veriler için kullanılır. Etiketten çıkış audit edilir ve incelenir.'; isActive = $true }
+    )
+
+    $dlpPolicies = @(
+        [pscustomobject]@{ id = '8b31ebde-0fb5-41f3-bd28-ec4375c9863f'; name = 'Default policy for Teams'; workloadScope = @('Teams'); mode = 'Enforce'; ruleCount = 2; sensitiveInfoTypes = @('Credit Card Number', 'TR IBAN'); lastModifiedAt = '2026-06-12T21:59:18Z' }
+        [pscustomobject]@{ id = '77a1b880-5169-41bf-95fe-7ceac35ca21a'; name = 'TC Onay (KVKK & PII Koruması)'; workloadScope = @('Exchange', 'SharePoint', 'OneDrive'); mode = 'Enforce'; ruleCount = 3; sensitiveInfoTypes = @('Turkey National Identification Number (TCKN)', 'TR IBAN', 'Credit Card Number'); lastModifiedAt = '2026-08-15T12:08:33Z' }
+        [pscustomobject]@{ id = 'dde1a4f1-c6da-42dc-ac45-20c5f626a2bd'; name = 'DSPM for AI - Protect sensitive data from Copilot processing'; workloadScope = @('Microsoft 365', 'Copilot / AI'); mode = 'TestWithoutNotifications'; ruleCount = 2; sensitiveInfoTypes = @('RECETE / Sağlık Verisi', 'Kaynak Kod & API Anahtarı'); lastModifiedAt = '2026-10-02T08:08:39Z' }
+        [pscustomobject]@{ id = '5feefd82-d793-41b6-8690-a2fe58f823eb'; name = 'DSPM for AI: Detect sensitive info added to AI sites'; workloadScope = @('Endpoint'); mode = 'Enforce'; ruleCount = 2; sensitiveInfoTypes = @('Turkey National Identification Number (TCKN)', 'Kaynak Kod & API Anahtarı', 'Credit Card Number'); lastModifiedAt = '2026-10-02T08:12:05Z' }
+    )
+
+    $mult = if ($Mode -eq 'Weekly') { 1 } else { 3 }
+    $dlpEvents = New-Object System.Collections.ArrayList
+
+    $dlpTemplates = @(
+        @{ Pol = 'TC Onay (KVKK & PII Koruması)'; Rule = 'Dış E-postada Toplu TCKN ve IBAN Engelleme'; Sev = 'High'; Act = @('BlockAccess', 'NotifyUser'); Override = @();Wl = 'Exchange'; User = 'finans.operasyon@contoso.com'; Sit = 'Turkey National Identification Number (TCKN)'; SitCnt = 18; Count = (4 * $mult); Just = '' }
+        @{ Pol = 'TC Onay (KVKK & PII Koruması)'; Rule = 'SharePoint Dış Paylaşımda Kredi Kartı & TCKN'; Sev = 'High'; Act = @('BlockAccess', 'NotifyUser'); Override = @('BlockAccess'); Wl = 'SharePoint'; User = 'ik.bordro@contoso.com'; Sit = 'Turkey National Identification Number (TCKN)'; SitCnt = 25; Count = (3 * $mult); Just = 'Yıllık bağımsız denetim firması aktarımı (Onay #4412)' }
+        @{ Pol = 'DSPM for AI: Detect sensitive info added to AI sites'; Rule = 'Harici Üretken Yapay Zekâ Sitelerine Veri Yükleme Engeli'; Sev = 'High'; Act = @('BlockAccess'); Override = @(); Wl = 'Endpoint'; User = 'arge.analist@contoso.com'; Sit = 'Kaynak Kod & API Anahtarı'; SitCnt = 6; Count = (3 * $mult); Just = '' }
+        @{ Pol = 'Default policy for Teams'; Rule = 'Teams Dış Sohbette Kredi Kartı / IBAN Paylaşımı'; Sev = 'Medium'; Act = @('BlockAccess', 'NotifyUser'); Override = @(); Wl = 'MicrosoftTeams'; User = 'satis.destek@contoso.com'; Sit = 'Credit Card Number'; SitCnt = 4; Count = (2 * $mult); Just = '' }
+        @{ Pol = 'TC Onay (KVKK & PII Koruması)'; Rule = 'OneDrive Harici Bağlantıda Finansal IBAN Tespiti'; Sev = 'Medium'; Act = @('NotifyUser'); Override = @('BlockAccess'); Wl = 'OneDrive'; User = 'tedarik.uzmani@contoso.com'; Sit = 'TR IBAN'; SitCnt = 9; Count = (2 * $mult); Just = 'Tedarikçi mutabakat dosyası' }
+        @{ Pol = 'DSPM for AI - Protect sensitive data from Copilot processing'; Rule = 'Copilot İstemi İçinde RECETE / Kritik Veri Denetimi'; Sev = 'Medium'; Act = @('Audit'); Override = @(); Wl = 'Copilot / AI'; User = 'klinik.koordinator@contoso.com'; Sit = 'RECETE / Sağlık Verisi'; SitCnt = 5; Count = (2 * $mult); Just = '' }
+    )
+
+    foreach ($t in $dlpTemplates) {
+        for ($i = 1; $i -le $t.Count; $i++) {
+            [void]$dlpEvents.Add([pscustomobject]@{
+                Id            = [guid]::NewGuid().ToString()
+                Workload      = $t.Wl
+                UserId        = $t.User
+                Severity      = $t.Sev
+                ExceptionInfo = $t.Just
+                PolicyDetails = @(
+                    [pscustomobject]@{
+                        PolicyName = $t.Pol
+                        Rules      = @(
+                            [pscustomobject]@{
+                                RuleName          = $t.Rule
+                                Severity          = $t.Sev
+                                Actions           = $t.Act
+                                OverriddenActions = $t.Override
+                                ConditionsMatched = [pscustomobject]@{
+                                    SensitiveInformation = @(
+                                        [pscustomobject]@{
+                                            SensitiveInfoTypeName = $t.Sit
+                                            Count                 = $t.SitCnt
+                                        }
+                                    )
+                                }
+                            }
+                        )
+                    }
+                )
+            })
+        }
+    }
+
+    $auditRecs = New-Object System.Collections.ArrayList
+    $labelTemplates = @(
+        @{ Lbl = '78b75aa9-787a-4ae4-b151-de2310a6217f'; Op = 'SensitivityLabelApplied'; Wl = 'SharePoint'; User = 'klinik.koordinator@contoso.com'; Src = 'Auto'; Cnt = (9 * $mult) }
+        @{ Lbl = '78b75aa9-787a-4ae4-b151-de2310a6217f'; Op = 'SensitivityLabelUpdated'; Wl = 'Endpoint'; User = 'arge.analist@contoso.com'; Src = 'Manual'; Cnt = (2 * $mult) }
+        @{ Lbl = 'defa4170-0d19-0005-0007-bc88714345d2'; Op = 'SensitivityLabelApplied'; Wl = 'SharePoint'; User = 'finans.operasyon@contoso.com'; Src = 'Manual'; Cnt = (14 * $mult) }
+        @{ Lbl = 'defa4170-0d19-0005-0007-bc88714345d2'; Op = 'SensitivityLabelUpdated'; Wl = 'Exchange'; User = 'ik.bordro@contoso.com'; Src = 'Manual'; Cnt = (3 * $mult) }
+        @{ Lbl = 'defa4170-0d19-0005-0004-bc88714345d2'; Op = 'SensitivityLabelApplied'; Wl = 'OneDrive'; User = 'satis.destek@contoso.com'; Src = 'Default'; Cnt = (18 * $mult) }
+        @{ Lbl = 'defa4170-0d19-0005-000a-bc88714345d2'; Op = 'SensitivityLabelApplied'; Wl = 'Exchange'; User = 'hukuk.musavir@contoso.com'; Src = 'Manual'; Cnt = (6 * $mult) }
+        @{ Lbl = 'defa4170-0d19-0005-000a-bc88714345d2'; Op = 'SensitivityLabelRemoved'; Wl = 'Endpoint'; User = 'tedarik.uzmani@contoso.com'; Src = 'Manual'; Cnt = (1 * $mult) }
+        @{ Lbl = 'defa4170-0d19-0005-0001-bc88714345d2'; Op = 'SensitivityLabelApplied'; Wl = 'SharePoint'; User = 'kurumsal.iletisim@contoso.com'; Src = 'Manual'; Cnt = (7 * $mult) }
+    )
+    foreach ($lt in $labelTemplates) {
+        for ($i = 1; $i -le $lt.Cnt; $i++) {
+            [void]$auditRecs.Add([pscustomobject]@{
+                Operation         = $lt.Op
+                Workload          = $lt.Wl
+                UserId            = $lt.User
+                SensitivityLabelId= $lt.Lbl
+                ActionSource      = $lt.Src
+            })
+        }
+    }
+
+    $alerts = @(
+        [pscustomobject]@{ id = 'a1'; title = 'DLP policy match: Multiple TCKN and IBAN records shared externally'; severity = 'high'; status = 'inProgress'; serviceSource = 'microsoftPurview'; category = 'DataLossPrevention'; createdDateTime = $End.AddDays(-2).ToString('o') }
+        [pscustomobject]@{ id = 'a2'; title = 'Sensitivity label downgraded from RECETE (Kritik Veri) to General'; severity = 'high'; status = 'new'; serviceSource = 'microsoftPurview'; category = 'InformationProtection'; createdDateTime = $End.AddDays(-4).ToString('o') }
+        [pscustomobject]@{ id = 'a3'; title = 'Endpoint DLP blocked sensitive source code paste to external AI site'; severity = 'medium'; status = 'resolved'; serviceSource = 'microsoftPurview'; category = 'DataLossPrevention'; createdDateTime = $End.AddDays(-6).ToString('o') }
+        [pscustomobject]@{ id = 'a4'; title = 'Unusual volume of labeled file downloads from SharePoint Finance site'; severity = 'medium'; status = 'resolved'; serviceSource = 'microsoftPurview'; category = 'InsiderRiskManagement'; createdDateTime = $End.AddDays(-9).ToString('o') }
+    )
+
+    $incidents = @(
+        [pscustomobject]@{ id = 'inc-101'; severity = 'high'; status = 'inProgress'; classification = 'truePositive'; createdDateTime = $End.AddDays(-2).ToString('o'); lastUpdateDateTime = $End.AddDays(-1).ToString('o') }
+        [pscustomobject]@{ id = 'inc-102'; severity = 'high'; status = 'resolved'; classification = 'truePositive'; createdDateTime = $End.AddDays(-5).ToString('o'); lastUpdateDateTime = $End.AddDays(-5).AddHours(3.5).ToString('o') }
+        [pscustomobject]@{ id = 'inc-103'; severity = 'medium'; status = 'resolved'; classification = 'benignPositive'; createdDateTime = $End.AddDays(-7).ToString('o'); lastUpdateDateTime = $End.AddDays(-7).AddHours(2.1).ToString('o') }
+        [pscustomobject]@{ id = 'inc-104'; severity = 'low'; status = 'resolved'; classification = 'falsePositive'; createdDateTime = $End.AddDays(-11).ToString('o'); lastUpdateDateTime = $End.AddDays(-11).AddHours(1.4).ToString('o') }
+    )
+
+    $snap = [pscustomobject]@{
+        collectedAt                 = (Get-Date).ToUniversalTime().ToString('o')
+        dlpPolicies                 = $dlpPolicies
+        dlpRules                    = @()
+        sensitivityLabels           = $labels
+        sensitivityLabelCount       = 13
+        sensitivityLabelPolicyCount = 2
+        autoLabelPolicyCount        = 2
+        retentionPolicyCount        = 3
+        retentionLabelCount         = 4
+        insiderRiskPolicyCount      = 2
+        commCompliancePolicyCount   = 2
+    }
+
+    $sources = [ordered]@{
+        AlertsV2      = [pscustomobject]@{ Name = 'Graph Security Alerts v2'; Status = 'Available'; Detail = "$($alerts.Count) Purview uyarisi" }
+        Incidents     = [pscustomobject]@{ Name = 'Graph Security Incidents'; Status = 'Available'; Detail = "$($incidents.Count) olay (top=50)" }
+        DlpActivity   = [pscustomobject]@{ Name = 'O365 Activity API (DLP.All)'; Status = 'Available'; Detail = "$($dlpEvents.Count) DLP kural eslesmesi" }
+        O365AuditFeed = [pscustomobject]@{ Name = 'O365 Activity API (Audit Akislari)'; Status = 'Available'; Detail = "$($auditRecs.Count) etiket ve uyum kaydi" }
+        AuditLog      = [pscustomobject]@{ Name = 'Graph Audit Log Queries'; Status = 'Available'; Detail = "Birlesik denetim sorgusu tamamlandi" }
+        EDiscovery    = [pscustomobject]@{ Name = 'Graph eDiscovery Cases'; Status = 'Available'; Detail = '2 aktif vaka' }
+        Policies      = [pscustomobject]@{ Name = 'Purview Politika & Etiket Envanteri'; Status = 'Available'; Detail = 'IPPS + Graph Etiket API (13 etiket, 4 DLP pol.)' }
+    }
+
+    return [pscustomobject]@{
+        AlertsAll       = $alerts
+        Incidents       = $incidents
+        DlpEvents       = @($dlpEvents.ToArray())
+        AuditRecords    = @($auditRecs.ToArray())
+        EDiscoveryCases = @(
+            [pscustomobject]@{ id = 'case-1'; status = 'active' }
+            [pscustomobject]@{ id = 'case-2'; status = 'active' }
+        )
+        PolicySnapshot  = $snap
+        Sources         = $sources
+        Start           = $Start
+        End             = $End
+        Mode            = $Mode
+    }
 }
 
 # ------------------------------------------------------------ PDF / MAIL ----

@@ -1,15 +1,18 @@
 ﻿<#
 .SYNOPSIS
-    Purview Reporting - Microsoft Purview haftalik ve aylik yonetici raporu.
+    Purview Reporting - Microsoft Purview haftalik (1 sayfa) ve aylik (4 sayfa) yonetici raporu.
 
 .DESCRIPTION
-    Haftalik mod  : kisa yonetici ozeti, tek sayfa, gecen tam hafta (Pazartesi-Pazar).
-    Aylik mod     : ayrintili 3 bolumlu rapor, trend karsilastirmali, gecen takvim ayi.
+    Haftalik mod   : kisa yonetici ve operasyon ozeti, tek sayfa A4, gecen tam hafta (Pazartesi-Pazar).
+    Aylik mod      : 4 sayfalik kapsamli rapor (1: Yonetici Ozeti, 2: Hassasiyet Etiketleri ve Kullanim,
+                     3: DLP Kural, SIT ve Kullanici Analizi, 4: Trend, Politika Envanteri ve Aksiyonlar).
+    -SampleDemo    : Tum tablolarin (Etiket kullanimi, DLP kurallari, SIT, en cok tetikleyen kullanicilar,
+                     override gerekceleri ve trend) dolu oldugu ornek kurumsal rapor uretir.
 
 .EXAMPLE
-    .\New-PurviewReport.ps1 -Mode Weekly -DryRun
-    .\New-PurviewReport.ps1 -Mode Monthly -DryRun -Pdf
-    .\New-PurviewReport.ps1 -Mode Monthly -Date 2026-11-15 -ExportCsv -DryRun
+    .\New-PurviewReport.ps1 -Mode Weekly -DryRun -Pdf
+    .\New-PurviewReport.ps1 -Mode Monthly -DryRun -Pdf -ExportCsv
+    .\New-PurviewReport.ps1 -Mode Monthly -SampleDemo -DryRun -Pdf
     .\New-PurviewReport.ps1 -Test
 #>
 [CmdletBinding()]
@@ -18,7 +21,10 @@ param(
     [datetime] $Date,
     [string]   $ConfigPath,
     [string]   $PolicySnapshotPath,
+    [string]   $OutputDirectory,
+    [string]   $OutputPrefix,
     [switch]   $CollectIpps,
+    [switch]   $SampleDemo,
     [switch]   $DryRun,
     [switch]   $Test,
     [switch]   $ExportCsv,
@@ -31,9 +37,16 @@ $script:Root = $PSScriptRoot
 . (Join-Path $script:Root 'PurviewReport.Core.ps1')
 . (Join-Path $script:Root 'PurviewReport.Html.ps1')
 
-if (-not $ConfigPath) { $ConfigPath = Join-Path $script:Root 'customer.json' }
+if (-not $ConfigPath) {
+    if ($SampleDemo) {
+        $ConfigPath = Join-Path $script:Root 'customer.example.json'
+    }
+    else {
+        $ConfigPath = Join-Path $script:Root 'customer.json'
+    }
+}
 if (-not (Test-Path $ConfigPath)) {
-    throw "Yapilandirma bulunamadi: $ConfigPath (once Install-PurviewReport.ps1 calistirin)"
+    throw "Yapilandirma bulunamadi: $ConfigPath (once Install-PurviewReport.ps1 calistirin veya -SampleDemo kullanin)"
 }
 $cfg = Get-Content $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
@@ -82,18 +95,18 @@ if ($Test) {
         param([string]$Name, [scriptblock]$Action, [switch]$Optional)
         try {
             $r = & $Action
-            Write-Log ("{0,-42} OK    {1}" -f $Name, $r) 'OK'
+            Write-Log ("{0,-44} OK    {1}" -f $Name, $r) 'OK'
         }
         catch {
             $msg = Get-HttpErrorBody $_
             if (-not $msg) { $msg = $_.Exception.Message }
             if ($Optional) {
                 $script:warn++
-                Write-Log ("{0,-42} UYARI {1}" -f $Name, $msg) 'WARN'
+                Write-Log ("{0,-44} UYARI {1}" -f $Name, $msg) 'WARN'
             }
             else {
                 $script:fail++
-                Write-Log ("{0,-42} HATA  {1}" -f $Name, $msg) 'ERROR'
+                Write-Log ("{0,-44} HATA  {1}" -f $Name, $msg) 'ERROR'
             }
         }
     }
@@ -114,20 +127,25 @@ if ($Test) {
         $r = Invoke-RestMethod "$script:GraphResource/v1.0/security/incidents?`$top=50" -Headers @{ Authorization = "Bearer $script:grTok" }
         "$($r.value.Count) ornek kayit"
     }
-    Test-Step '4. Audit Log Queries erisimi' -Optional {
+    Test-Step '4. Graph Sensitivity Labels erisimi' -Optional {
+        $gLbl = Get-GraphSensitivityLabelInventory -GraphToken $script:grTok
+        if ($gLbl.Status -ne 'Available') { throw $gLbl.Detail }
+        "$($gLbl.Labels.Count) etiket tanimi"
+    }
+    Test-Step '5. Audit Log Queries erisimi' -Optional {
         $r = Invoke-RestMethod "$script:GraphResource/v1.0/security/auditLog/queries?`$top=1" -Headers @{ Authorization = "Bearer $script:grTok" }
         "$($r.value.Count) mevcut sorgu"
     }
-    Test-Step '5. eDiscovery Cases erisimi' -Optional {
+    Test-Step '6. eDiscovery Cases erisimi' -Optional {
         $r = Invoke-RestMethod "$script:GraphResource/v1.0/security/cases/ediscoveryCases?`$top=1" -Headers @{ Authorization = "Bearer $script:grTok" }
         "$($r.value.Count) vaka"
     }
-    Test-Step '6. O365 Activity API (DLP.All)' -Optional {
+    Test-Step '7. O365 Activity API (Audit + DLP)' -Optional {
         $script:o365Tok = Get-AppToken $cfg $script:O365Resource
         $subs = @(Invoke-RestMethod "$script:O365Resource/api/v1.0/$($cfg.TenantId)/activity/feed/subscriptions/list" -Headers @{ Authorization = "Bearer $script:o365Tok" })
-        "jeton alindi ($($subs.Count) abonelik)"
+        "jeton alindi ($($subs.Count) aktif abonelik)"
     }
-    Test-Step '7. IPPS politika anlik goruntusu' -Optional {
+    Test-Step '8. IPPS politika anlik goruntusu' -Optional {
         $sp = Join-Path $script:Root 'Snapshots\purview-policies.json'
         if ($cfg.Purview -and $cfg.Purview.PolicySnapshotPath) {
             $sp = if ([IO.Path]::IsPathRooted($cfg.Purview.PolicySnapshotPath)) { $cfg.Purview.PolicySnapshotPath } else { Join-Path $script:Root $cfg.Purview.PolicySnapshotPath }
@@ -136,7 +154,7 @@ if ($Test) {
         $j = Get-Content $sp -Raw -Encoding UTF8 | ConvertFrom-Json
         "$(@($j.dlpPolicies).Count) DLP politikasi"
     }
-    Test-Step '8. PDF motoru (Microsoft Edge)' -Optional {
+    Test-Step '9. PDF motoru (Microsoft Edge)' -Optional {
         if (Get-EdgePath) { 'bulundu' } else { throw 'Edge yok - rapor HTML uretilecek' }
     }
 
@@ -150,26 +168,50 @@ if ($Test) {
 }
 
 # --------------------------------------------------------- opsiyonel IPPS ---
-if ($CollectIpps) {
+if ($CollectIpps -and (-not $SampleDemo)) {
     $collectScript = Join-Path $script:Root 'Collect-PurviewPolicies.ps1'
     if (Test-Path $collectScript) {
         Write-Log 'IPPS politika envanteri guncelleniyor...'
         $org = if ($cfg.PSObject.Properties['Organization']) { [string]$cfg.Organization } else { '' }
-        & $collectScript -Organization $org
+        $app = if ($cfg.AuthMode -eq 'Certificate') { [string]$cfg.ClientId } else { '' }
+        $crt = if ($cfg.AuthMode -eq 'Certificate') { [string]$cfg.CertificateThumbprint } else { '' }
+        & $collectScript -Organization $org -AppId $app -CertificateThumbprint $crt
     }
 }
 
 # --------------------------------------------------------------- uretim -----
 try {
-    $data = Get-PurviewData -Config $cfg -Start $start -End $end -Mode $Mode -PolicySnapshotOverride $PolicySnapshotPath
-    $k    = New-PurviewKpi -Data $data -Config $cfg
+    if ($SampleDemo) {
+        Write-Log 'Ornek kurumsal veri seti (-SampleDemo) olusturuluyor...'
+        $data = New-PurviewSampleData -Start $start -End $end -Mode $Mode
+    }
+    else {
+        $data = Get-PurviewData -Config $cfg -Start $start -End $end -Mode $Mode -PolicySnapshotOverride $PolicySnapshotPath
+    }
+    $k = New-PurviewKpi -Data $data -Config $cfg
 
     # Onceki donem (trend)
     $prevTag = if ($Mode -eq 'Weekly') { $start.AddDays(-7).ToString('yyyy-MM-dd') + '-hafta' }
                else                    { $start.AddMonths(-1).ToString('yyyy-MM') }
     $prev = $null
     $prevFile = Join-Path $script:Root "Archive\$Mode\$prevTag\kpi.json"
-    if (Test-Path $prevFile) {
+    if ($SampleDemo) {
+        $prev = [pscustomobject]@{
+            DlpPolicyTotal    = 4
+            DlpPolicyEnforce  = 2
+            DlpEventsTotal    = [math]::Max(1, [int]($k.DlpEventsTotal * 0.8))
+            DlpEventsHigh     = [math]::Max(1, [int]($k.DlpEventsHigh * 1.25))
+            DlpOverrideCount  = [math]::Max(1, $k.DlpOverrideCount + 2)
+            LabelAppliedCount = [math]::Max(1, [int]($k.LabelAppliedCount * 0.78))
+            LabelChangedCount = [math]::Max(1, $k.LabelChangedCount + $k.LabelRemovedCount - 1)
+            PurviewAlerts     = 3
+            TotalAlertsM365   = 5
+            TotalIncidents    = 5
+            IncClosed         = 4
+            AuditRecordsTotal = [math]::Max(10, [int]($k.AuditRecordsTotal * 0.85))
+        }
+    }
+    elseif (Test-Path $prevFile) {
         try {
             $prev = Get-Content $prevFile -Raw -Encoding UTF8 | ConvertFrom-Json
             Write-Log "Onceki donem ($prevTag) trend icin yuklendi."
@@ -182,53 +224,66 @@ try {
         Write-Log 'Onceki donem verisi yok; trend sutunlari bos gelecek.'
     }
 
-    # Arsiv
-    $arch = Join-Path $script:Root "Archive\$Mode\$($k.Etiket)"
-    if (-not (Test-Path $arch)) { New-Item -ItemType Directory -Path $arch -Force | Out-Null }
-    $data.AlertsAll      | ConvertTo-Json -Depth 6 | Set-Content "$arch\raw-alerts.json"    -Encoding UTF8
-    $data.Incidents      | ConvertTo-Json -Depth 6 | Set-Content "$arch\raw-incidents.json" -Encoding UTF8
-    $data.DlpEvents      | ConvertTo-Json -Depth 6 | Set-Content "$arch\raw-dlp.json"       -Encoding UTF8
-    if ($data.PolicySnapshot) {
-        $data.PolicySnapshot | ConvertTo-Json -Depth 6 | Set-Content "$arch\raw-policies.json" -Encoding UTF8
-    }
-    $k | ConvertTo-Json -Depth 8 | Set-Content "$arch\kpi.json" -Encoding UTF8
+    # Arsiv (SampleDemo degilse)
+    if (-not $SampleDemo) {
+        $arch = Join-Path $script:Root "Archive\$Mode\$($k.Etiket)"
+        if (-not (Test-Path $arch)) { New-Item -ItemType Directory -Path $arch -Force | Out-Null }
+        $data.AlertsAll      | ConvertTo-Json -Depth 6 | Set-Content "$arch\raw-alerts.json"    -Encoding UTF8
+        $data.Incidents      | ConvertTo-Json -Depth 6 | Set-Content "$arch\raw-incidents.json" -Encoding UTF8
+        $data.DlpEvents      | ConvertTo-Json -Depth 6 | Set-Content "$arch\raw-dlp.json"       -Encoding UTF8
+        if ($data.PolicySnapshot) {
+            $data.PolicySnapshot | ConvertTo-Json -Depth 8 | Set-Content "$arch\raw-policies.json" -Encoding UTF8
+        }
+        $k | ConvertTo-Json -Depth 8 | Set-Content "$arch\kpi.json" -Encoding UTF8
 
-    if ($ExportCsv) {
-        $csv = Join-Path $arch 'CSV'
-        if (-not (Test-Path $csv)) { New-Item -ItemType Directory -Path $csv | Out-Null }
-        if (@($data.AlertsAll).Count) {
-            $data.AlertsAll | Select-Object id, title, severity, status, serviceSource, category, createdDateTime |
-                Export-Csv "$csv\uyarilar.csv" -NoTypeInformation -Encoding UTF8
+        if ($ExportCsv) {
+            $csv = Join-Path $arch 'CSV'
+            if (-not (Test-Path $csv)) { New-Item -ItemType Directory -Path $csv | Out-Null }
+            if (@($data.AlertsAll).Count) {
+                $data.AlertsAll | Select-Object id, title, severity, status, serviceSource, category, createdDateTime |
+                    Export-Csv "$csv\uyarilar.csv" -NoTypeInformation -Encoding UTF8
+            }
+            if (@($data.Incidents).Count) {
+                $data.Incidents | Select-Object id, displayName, severity, status, classification, determination, assignedTo, createdDateTime, lastUpdateDateTime |
+                    Export-Csv "$csv\olaylar.csv" -NoTypeInformation -Encoding UTF8
+            }
+            if (@($k.TopDlpRules).Count) {
+                $k.TopDlpRules | Export-Csv "$csv\dlp-kural-eslesmeleri.csv" -NoTypeInformation -Encoding UTF8
+            }
+            if (@($k.TopDlpUsers).Count) {
+                $k.TopDlpUsers | Export-Csv "$csv\dlp-kullanicilar.csv" -NoTypeInformation -Encoding UTF8
+            }
+            if (@($k.SensitivityLabels).Count) {
+                $k.SensitivityLabels | Select-Object id, displayName, priority, encryptionEnabled, markingEnabled, isActive, tooltip |
+                    Export-Csv "$csv\hassasiyet-etiketleri.csv" -NoTypeInformation -Encoding UTF8
+            }
+            if (@($k.DlpPolicies).Count) {
+                $k.DlpPolicies | Select-Object id, name, mode, @{ Name = 'workloadScope'; Expression = { ($_.workloadScope -join ';') } }, lastModifiedAt |
+                    Export-Csv "$csv\dlp-politikalari.csv" -NoTypeInformation -Encoding UTF8
+            }
+            Write-Log "CSV dosyalari yazildi: $csv"
         }
-        if (@($data.Incidents).Count) {
-            $data.Incidents | Select-Object id, displayName, severity, status, classification, determination, assignedTo, createdDateTime, lastUpdateDateTime |
-                Export-Csv "$csv\olaylar.csv" -NoTypeInformation -Encoding UTF8
-        }
-        if (@($data.DlpEvents).Count) {
-            $data.DlpEvents | Select-Object Id, Workload, Operation, CreationTime, UserId |
-                Export-Csv "$csv\dlp-olaylari.csv" -NoTypeInformation -Encoding UTF8
-        }
-        if (@($k.DlpPolicies).Count) {
-            $k.DlpPolicies | Select-Object id, name, mode, @{ Name = 'workloadScope'; Expression = { ($_.workloadScope -join ';') } }, lastModifiedAt |
-                Export-Csv "$csv\dlp-politikalari.csv" -NoTypeInformation -Encoding UTF8
-        }
-        Write-Log "CSV dosyalari yazildi: $csv"
     }
 
     # HTML
     $html = if ($Mode -eq 'Weekly') { New-PurviewWeeklyHtml  $k $cfg $script:Root $prev }
             else                    { New-PurviewMonthlyHtml $k $cfg $script:Root $prev }
 
-    $safe = ($cfg.CustomerName -replace '[^A-Za-z0-9]', '')
+    $outDir = if ($OutputDirectory) {
+        if ([IO.Path]::IsPathRooted($OutputDirectory)) { $OutputDirectory } else { Join-Path $script:Root $OutputDirectory }
+    } else { Join-Path $script:Root 'Output' }
+    if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
+
+    $safe = if ($OutputPrefix) { $OutputPrefix } else { ($cfg.CustomerName -replace '[^A-Za-z0-9]', '') }
     if (-not $safe) { $safe = 'Organization' }
     $baseName = if ($Mode -eq 'Weekly') { "${safe}_Purview_Haftalik_$($k.Etiket)" } else { "${safe}_Purview_Aylik_$($k.Etiket)" }
-    $htmlPath = Join-Path $script:Root "Output\$baseName.html"
+    $htmlPath = Join-Path $outDir "$baseName.html"
     $html | Set-Content -Path $htmlPath -Encoding UTF8
     Write-Log "HTML uretildi: $htmlPath" 'OK'
 
     $attach = @($htmlPath)
     if ($Pdf -or ($cfg.Report -and $cfg.Report.AttachPdf)) {
-        $pdfPath = Join-Path $script:Root "Output\$baseName.pdf"
+        $pdfPath = Join-Path $outDir "$baseName.pdf"
         if (Convert-ToPdf $htmlPath $pdfPath) {
             $attach = @($pdfPath)
             Write-Log "PDF uretildi: $pdfPath" 'OK'
@@ -238,8 +293,8 @@ try {
         }
     }
 
-    if ($DryRun) {
-        Write-Log 'DryRun: mail gonderilmedi.' 'WARN'
+    if ($DryRun -or $SampleDemo) {
+        Write-Log 'DryRun / SampleDemo: mail gonderilmedi.' 'WARN'
     }
     else {
         Send-Report -Config $cfg -Kpi $k -Html $html -Attachments $attach -Mode $Mode

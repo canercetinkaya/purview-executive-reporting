@@ -1,33 +1,36 @@
-# Mimari Tasarım ve Raporlama Kataloğu
+# Mimari Tasarım, Kimlik Doğrulama Katmanları ve 4 Sayfalık KPI Kataloğu
 
-Bu doküman `Purview Executive Reporting` servisinin teknik mimarisini, veri kaynaklarının sınırlarını ve ürettiği 3 sayfalık aylık yönetici raporunun yapısını özetler.
+Bu doküman `Purview Executive Reporting` servisinin çok katmanlı veri toplama mimarisini, desteklediği kimlik doğrulama yöntemlerini ve ürettiği 4 sayfalık aylık yönetici/teknik raporun metrik haritasını açıklar.
 
-## 1. Temel Mimari İlkeleri
+## 1. Çok Katmanlı Veri Toplama ve Kimlik Doğrulama Mimarisi
 
-- **Sıfır Web Sunucusu ve Sıfır Ek Altyapı:** Çalışma zamanı yalnızca PowerShell, yerel JSON/CSV arşivi ve Windows Task Scheduler üzerine kuruludur.
-- **Salt Okunur Tasarım:** Tüm API çağrıları `GET` (yalnızca `auditLog/queries` için geçici arama işi açma ve `DLP.All` aboneliği başlatma `POST` istekleri) ve `Connect-IPPSSession` üzerinde yalnızca `Get-*` komutlarıyla sınırlıdır.
-- **Şeffaf Veri Durumu:** Lisansı bulunmayan veya henüz onaylanmamış bir kaynak sessizce sıfır olarak gösterilmez; her raporda **Veri Kaynağı Sağlık Matrisi** tablosunda `Erişilebilir`, `Kısmi Veri`, `Yetki Eksik`, `Lisanssız`, `Beta API` veya `IPPS Anlık Görüntüsü Gerekli` durumu belirtilir.
+Microsoft Purview telemetrisi tek bir API altında toplanmadığı için servis **3 tamamlayıcı bağlantı katmanını** birleştirir:
 
-## 2. Kullanılan Microsoft Veri Kaynakları ve Bilinen API Sınırları
+| Katman | Kimlik Doğrulama | Kullanılan Uç Noktalar / Komutlar | Sağladığı Metrikler |
+| :--- | :--- | :--- | :--- |
+| **1. Microsoft Graph API** | App-Only (`Secret` DPAPI veya `Certificate` RS256 JWT) | `/v1.0/security/alerts_v2`<br>`/v1.0/security/incidents?$top=50`<br>`/beta/informationProtection/policy/labels`<br>`/v1.0/security/auditLog/queries`<br>`/v1.0/security/cases/ediscoveryCases` | Purview ve M365 güvenlik uyarıları, olay kapanış süreleri, **Hassasiyet Etiketi tanımları ve öncelikleri**, 30-180 günlük birleşik denetim sorguları, eDiscovery vakaları |
+| **2. Office 365 Management Activity API** | App-Only (`ActivityFeed.Read` + `ActivityFeed.ReadDlp`) | `manage.office.com/.../subscriptions/content`<br>Akışlar: `DLP.All`, `Audit.General`, `Audit.SharePoint`, `Audit.Exchange` | **En çok eşleşen DLP politikaları ve kuralları**, **Hassas Bilgi Türleri (SIT)**, **en çok DLP tetikleyen kullanıcılar**, **kullanıcı override gerekçeleri**, **etiket uygulama/düşürme/kaldırma olayları**, iş yükü denetim dağılımı |
+| **3. Purview IPPS & EXO PowerShell** | Katılımsız X.509 Sertifika (`Exchange.ManageAsApp` + `Compliance Reader`) veya Etkileşimli Oturum | `Get-DlpCompliancePolicy`, `Get-DlpComplianceRule`, `Get-Label`, `Get-LabelPolicy`, `Get-AutoSensitivityLabelPolicy`, `Get-RetentionCompliancePolicy`, `Get-ComplianceTag`, `Get-InsiderRiskPolicy`, `Get-SupervisoryReviewPolicyV2`, `Export-ActivityExplorerData` | DLP politika ve kural envanteri, korunan SIT listesi, zorunlu etiketleme ve düşürme gerekçesi ayarları, otomatik etiketleme, saklama ve kayıt etiketleri, iç tehdit ve iletişim uyumu politikaları |
 
-| Katman | Uç Nokta / Komut | Teknik Not ve Sınır |
-| :--- | :--- | :--- |
-| Uyarılar | `GET /v1.0/security/alerts_v2` | Emekliye ayrılan `/security/alerts` yerine v2 kullanılır. |
-| Olaylar | `GET /v1.0/security/incidents?$top=50` | Microsoft Graph v1.0 `$top` parametresi üst sınırı **50** olarak uygulanır. |
-| DLP Olayları | `manage.office.com/.../content?contentType=DLP.All` | Canlı sorgu yalnızca **son 7 günü** ve istek başına **24 saatlik** dilimi kapsar; haftalık arşivler aylık raporda tekilleştirilerek birleştirilir. |
-| Denetim Günlüğü | `POST/GET /v1.0/security/auditLog/queries` | Asenkron çalışır; yapılandırılan bekleme süresinde bitmezse raporu bloke etmez, `Kısmi Veri` işaretler. |
-| eDiscovery | `GET /v1.0/security/cases/ediscoveryCases` | İlgili lisans yoksa HTTP 403 döner ve `Lisanssız` olarak raporlanır. |
-| Politika Envanteri | `Get-DlpCompliancePolicy`, `Get-Label`, `Get-LabelPolicy`, `Get-RetentionCompliancePolicy`, `Get-InsiderRiskPolicy`, `Get-SupervisoryReviewPolicyV2` | `Snapshots\purview-policies.json` üzerinden okunur. Opsiyonel `EnableBetaLabelApi` bayrağı açıkça `Beta API` etiketiyle kullanılabilir. |
+## 2. Aylık Raporun 4 Sayfalık Metrik Kataloğu (`-Mode Monthly`)
 
-## 3. Rapor Çıktı Yapısı
+### Sayfa 1 — Yönetici Özeti, Purview Kapsamı ve Kaynak Sağlık Matrisi
+- **Yönetici Özeti:** Dönem içindeki DLP politika/kural kapsamı, aktif hassasiyet etiketleri, gerçekleşen DLP eşleşmeleri (engelleme ve override), etiket işlemleri ve olay müdahale performansı.
+- **Dikkat Gerektiren Başlıklar:** Açık olaylar, yüksek şiddetli uyarılar, kullanıcı DLP override sayıları, etiket düşürme/silme hareketleri, Test kipinde kalan DLP politikaları.
+- **Veri Kaynağı Sağlık Matrisi:** 7 veri kaynağının gerçek durumu (`Erişilebilir`, `Kısmi Veri`, `Graph Etiket API`, `Yetki Eksik`, `Lisanssız`, `IPPS Anlık Görüntüsü Gerekli`).
 
-### Haftalık Özet (`-Mode Weekly` — 1 Sayfa A4)
-1. 6 KPI Kartı (DLP Politikası, Test Kipindeki Politikalar, DLP Olay Eşleşmesi, Purview Uyarıları, Açık Olaylar, Etiket/İç Tehdit Politikaları)
-2. Eşik Tabanlı Dikkat Gerektiren Başlıklar (`thresholds`)
-3. Son Güvenlik Uyarıları + Veri Kaynağı Sağlık Matrisi
-4. DLP Politika Envanteri Özeti
+### Sayfa 2 — Hassasiyet Etiketleri (Sensitivity Labels) ve Bilgi Koruma Analizi
+- **Etiket KPI Kartları:** Aktif / Toplam Etiket Tanımı, Toplam Etiket İşlemi, Uygulanan (`Applied`), Değiştirilen / Düşürülen (`Changed / Downgraded`), Kaldırılan (`Removed`).
+- **Kiracı Hassasiyet Etiketi Envanteri:** Etiket görünen adı (üst/alt etiket hiyerarşisiyle, ör. `Confidential / All Employees`, `RECETE`), öncelik (`0..12`), koruma biçimi (`Şifreleme + Filigran` / `Sınıflandırma`), durum ve politika açıklaması.
+- **Etiket Bazlı Kullanım Dağılımı & Kullanıcılar:** Hangi etiketin kaç kez uygulandığı, düşürüldüğü veya silindiği; en çok etiket işlemi yapan kullanıcılar ve iş yükleri.
 
-### Aylık Yönetim Raporu (`-Mode Monthly` — 3 Sayfa A4)
-- **Sayfa 1 — Yönetici Özeti ve Kapsam:** Dönem anlatımı, önceki aya kıyas özeti, Purview kontrol kartları, DLP İş Yükü Kapsamı çubukları ve Veri Kaynağı Sağlık Matrisi.
-- **Sayfa 2 — Olay, DLP ve Dönem Trendi:** Önceki dönem `Archive/Monthly/<YYYY-MM>/kpi.json` dosyasıyla karşılaştırmalı KPI tablosu, incident şiddet dağılımı, en çok tetiklenen DLP politikaları ve son güvenlik uyarıları.
-- **Sayfa 3 — Envanter ve Hizmet Aksiyonları:** Aktif DLP politikalarının kip (`Enforce`, `TestWithNotifications`, `TestWithoutNotifications`) tablosu, yönetilen hizmet faaliyet kartları, incident sınıflandırması ve gelecek ay için otomatik üretilmiş öncelikli aksiyon önerileri.
+### Sayfa 3 — DLP Kural Eşleşmeleri, Hassas Bilgi Türleri (SIT) ve Kullanıcı Analizi
+- **DLP KPI Kartları:** Toplam DLP Eşleşmesi, Yüksek Şiddetli DLP, Engellenen (`Block`), Kullanıcı Override, Bildirim / Denetim (`Notify / Audit`).
+- **En Çok Eşleşen DLP Politikaları ve Kuralları:** Politika adı, kural adı, şiddet, aksiyon rozeti (`Engellendi`, `Kullanıcı Override`, `Bildirim`, `Denetim`), eşleşme ve override adetleri.
+- **En Çok Eşleşen Hassas Bilgi Türleri (SIT):** Tespit edilen SIT adı (ör. `Turkey National Identification Number (TCKN)`, `Credit Card Number`, `TR IBAN`, `RECETE / Sağlık Verisi`), olay sayısı ve toplam tespit edilen veri örneği (`Instance Count`).
+- **En Çok DLP Tetikleyen Kullanıcılar:** Kullanıcı UPN, toplam olay, yüksek şiddetli olay, engellenen, override sayısı, tespit edilen SIT örneği, iş yükleri ve **kullanıcının girdiği son override gerekçesi**.
+
+### Sayfa 4 — Dönem Trendi, Politika Envanteri ve Öncelikli Aksiyonlar
+- **Önceki Dönemle Karşılaştırmalı KPI Tablosu:** `Archive/Monthly/<YYYY-MM>/kpi.json` üzerinden önceki ayla fark ve yüzde değişim.
+- **Aktif DLP Politika Envanteri:** Politika adı, kip (`Enforce` / `Test`), iş yükü kapsamı, korunan SIT türleri ve son güncelleme tarihi.
+- **Son Güvenlik Uyarıları (`alerts_v2`), En Sık Denetim Operasyonları ve Gelecek Ay İçin Öncelikli Aksiyonlar.**
