@@ -1,0 +1,33 @@
+# Dependencies & build outputs
+node_modules/
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Local environment & secrets (never commit)
+.env
+.env.local
+.env.*.local
+*.pfx
+*.p12
+*.key
+*.pem
+*.cer
+secret.txt
+smtp.txt
+customer-secrets*.json
+
+# Collector runtime snapshots
+collectors/powershell/output/
+*.snapshot.json
+
+# OS, editor & verification scratch artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.agents/
+*.log
+scratch/

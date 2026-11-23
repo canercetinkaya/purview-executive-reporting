@@ -1,0 +1,32 @@
+{
+  "name": "purview-executive-reporting",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Microsoft Purview Managed Service Executive Reporting Portal — multi-tenant executive & compliance reporting platform.",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev --workspace=apps/api",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev": "node -e \"const { spawn } = require('node:child_process'); const a = spawn('npm', ['run', 'dev:api'], { stdio: 'inherit', shell: true }); const w = spawn('npm', ['run', 'dev:web'], { stdio: 'inherit', shell: true }); const stop = () => { a.kill(); w.kill(); process.exit(0); }; process.on('SIGINT', stop); process.on('SIGTERM', stop);\"",
+    "build:domain": "npm run build --workspace=packages/domain",
+    "build:api": "npm run build --workspace=apps/api",
+    "build:web": "npm run build --workspace=apps/web",
+    "build": "npm run build:domain && npm run build:api && npm run build:web",
+    "typecheck": "npm run typecheck --workspace=packages/domain && npm run typecheck --workspace=apps/api && npm run typecheck --workspace=apps/web",
+    "lint": "npm run lint --workspace=apps/api && npm run lint --workspace=apps/web",
+    "test:domain": "npm run test --workspace=packages/domain",
+    "test:api": "npm run test --workspace=apps/api",
+    "test:web": "npm run test --workspace=apps/web",
+    "test": "npm run test:domain && npm run test:api && npm run test:web",
+    "test:ps": "pwsh -NoProfile -Command \"$cfg = New-PesterConfiguration; $cfg.Run.Path = './collectors/powershell/tests'; $cfg.Run.Exit = $true; $cfg.Output.Verbosity = 'Detailed'; Invoke-Pester -Configuration $cfg\"",
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}
