@@ -11,7 +11,7 @@
   "scripts": {
     "dev:api": "npm run dev --workspace=apps/api",
     "dev:web": "npm run dev --workspace=apps/web",
-    "dev": "node -e \"const { spawn } = require('node:child_process'); const a = spawn('npm', ['run', 'dev:api'], { stdio: 'inherit', shell: true }); const w = spawn('npm', ['run', 'dev:web'], { stdio: 'inherit', shell: true }); const stop = () => { a.kill(); w.kill(); process.exit(0); }; process.on('SIGINT', stop); process.on('SIGTERM', stop);\"",
+    "dev": "node -e \"const { spawn } = require('node:child_process'); const a = spawn('npm run dev:api', { stdio: 'inherit', shell: true }); const w = spawn('npm run dev:web', { stdio: 'inherit', shell: true }); const stop = () => { a.kill(); w.kill(); process.exit(0); }; process.on('SIGINT', stop); process.on('SIGTERM', stop);\"",
     "build:domain": "npm run build --workspace=packages/domain",
     "build:api": "npm run build --workspace=apps/api",
     "build:web": "npm run build --workspace=apps/web",

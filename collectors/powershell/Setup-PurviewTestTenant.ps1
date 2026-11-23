@@ -83,10 +83,20 @@ while ((Get-Date) -lt $deadline) {
         break
     }
     catch {
-        $raw = ''
-        try { $raw = (New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd() } catch { Write-Verbose 'Hata akisi okunamadi.' }
+        $raw = [string]$_.ErrorDetails.Message
+        if (-not $raw -and $_.Exception.Response) {
+            try {
+                if ($_.Exception.Response.Content) {
+                    $raw = $_.Exception.Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                }
+                else {
+                    $raw = (New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd()
+                }
+            }
+            catch { Write-Verbose 'Hata akisi okunamadi.' }
+        }
         if ($raw -match 'authorization_pending|slow_down') { continue }
-        throw "Oturum hatasi: $raw"
+        throw "Oturum hatasi: $raw $($_.Exception.Message)"
     }
 }
 if (-not $adminToken) { throw 'Cihaz kodu suresi doldu.' }
