@@ -1,0 +1,87 @@
+name: CI — Build, Test, Security & PowerShell Verification
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  node-verify:
+    name: Typecheck, Lint, Tests & Production Builds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Typecheck all workspaces
+        run: npm run typecheck
+
+      - name: Lint API and Web
+        run: npm run lint
+
+      - name: Run unit, integration, connector & UI tests
+        run: npm test
+
+      - name: Production build (domain, api, web)
+        run: npm run build
+
+      - name: Dependency vulnerability audit (high/critical)
+        run: npm audit --audit-level=high --omit=dev
+
+  powershell-verify:
+    name: PowerShell Collector PSSA & Pester
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer and Pester
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          }
+          $pester = Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version.Major -ge 5 }
+          if (-not $pester) {
+            Install-Module Pester -Force -Scope CurrentUser -SkipPublisherCheck
+          }
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path ./collectors/powershell -Recurse -Settings ./collectors/powershell/PSScriptAnalyzerSettings.psd1
+          if ($results) { $results | Format-Table ScriptName, Line, Severity, RuleName, Message -AutoSize }
+          $errors = @($results | Where-Object { $_.Severity -eq 'Error' })
+          if ($errors.Count -gt 0) { exit 1 }
+
+      - name: Run Pester collector tests
+        shell: pwsh
+        run: |
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path = './collectors/powershell/tests'
+          $cfg.Run.Exit = $true
+          $cfg.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $cfg
+
+  docker-compose-validate:
+    name: Validate Dockerfiles & Compose Configuration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose syntax
+        run: docker compose config -q
