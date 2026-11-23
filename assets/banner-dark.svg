@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="240" viewBox="0 0 1200 240" role="img" aria-label="Microsoft Purview Managed Service Executive Reporting Portal">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="240" viewBox="0 0 1200 240" role="img" aria-label="Microsoft Purview Yönetilen Hizmet Yönetici Raporlama Portalı">
   <!-- Editorial Ink Dark Surface (Unslop) -->
   <rect x="0.5" y="0.5" width="1199" height="239" rx="12" fill="#0B0D14" stroke="#222634" stroke-width="1"/>
 
@@ -8,49 +8,49 @@
 
   <!-- Left Column -->
   <text x="68" y="64" fill="#38BDF8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" letter-spacing="1.5">
-    MICROSOFT PURVIEW  /  MANAGED SERVICE EXECUTIVE PORTAL
+    MICROSOFT PURVIEW  /  YÖNETİLEN HİZMET YÖNETİCİ PORTALI
   </text>
 
   <text x="68" y="114" fill="#F8FAFC" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="36" font-weight="600" letter-spacing="-0.6">
     Purview Executive Reporting
   </text>
 
-  <text x="68" y="152" fill="#CBD5E1" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="400">
-    DLP · Information Protection · Insider Risk · Graph Security alerts_v2 · Service Value
+  <text x="68" y="152" fill="#CBD5E1" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="400">
+    DLP · Bilgi Koruma · İç Tehdit · Graph alerts_v2 · Hizmet Değeri Raporlaması
   </text>
 
-  <text x="68" y="190" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="500">
-    Multi-Tenant   |   7-Role RBAC   |   14-Month Demo Ready   |   Next.js + API + PostgreSQL
+  <text x="68" y="190" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="500">
+    Çok Kiracılı  |  7 Rollü RBAC  |  14 Aylık Hazır Demo  |  Next.js + API + PostgreSQL
   </text>
 
   <!-- Hairline divider -->
   <line x1="824" y1="42" x2="824" y2="198" stroke="#222634" stroke-width="1"/>
 
   <!-- Right Column -->
-  <g transform="translate(854, 46)">
-    <text x="0" y="18" fill="#F8FAFC" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="600">
-      8 Purview &amp; Graph Connectors
+  <g transform="translate(852, 46)">
+    <text x="0" y="18" fill="#F8FAFC" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="600">
+      8 Purview &amp; Graph Bağlayıcısı
     </text>
-    <text x="0" y="38" fill="#94A3B8" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5">
-      v1.0 First · 429/Backoff · Honest Availability
-    </text>
-
-    <line x1="0" y1="54" x2="300" y2="54" stroke="#1A1E2B" stroke-width="1"/>
-
-    <text x="0" y="78" fill="#F8FAFC" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="600">
-      Managed Service Proof
-    </text>
-    <text x="0" y="98" fill="#94A3B8" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5">
-      Strict Team vs. Microsoft Automation Split
+    <text x="0" y="38" fill="#94A3B8" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12">
+      v1.0 Öncelikli · 429 Koruması · Şeffaf Durum
     </text>
 
-    <line x1="0" y1="114" x2="300" y2="114" stroke="#1A1E2B" stroke-width="1"/>
+    <line x1="0" y1="54" x2="306" y2="54" stroke="#1A1E2B" stroke-width="1"/>
 
-    <text x="0" y="138" fill="#F8FAFC" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="600">
-      Executive A4 &amp; Scorecard
+    <text x="0" y="78" fill="#F8FAFC" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="600">
+      Yönetilen Hizmet Kanıtı
     </text>
-    <text x="0" y="158" fill="#94A3B8" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5">
-      Transparent Posture Formula · Print PDF / CSV
+    <text x="0" y="98" fill="#94A3B8" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12">
+      Ekip Emeği ve Microsoft Otomasyonu Ayrı
+    </text>
+
+    <line x1="0" y1="114" x2="306" y2="114" stroke="#1A1E2B" stroke-width="1"/>
+
+    <text x="0" y="138" fill="#F8FAFC" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15.5" font-weight="600">
+      Yönetici Raporu ve Puan Kartı
+    </text>
+    <text x="0" y="158" fill="#94A3B8" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12">
+      Açık Skor Formülü · A4 PDF ve CSV İhracı
     </text>
   </g>
 </svg>
