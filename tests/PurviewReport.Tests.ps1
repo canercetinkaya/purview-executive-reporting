@@ -210,9 +210,12 @@ Describe 'HTML Rapor Guvenligi (XSS, CSP, 4 Sayfa Aylik ve 1 Sayfa Haftalik)' {
         $html | Should -Match 'Turkey National Identification Number'
         $html | Should -Match 'finans\.uzman@contoso\.com'
         $html | Should -Match 'Musteri mutabakat aktarimi'
-        $html | Should -Match 'Sayfa 2/4'
-        $html | Should -Match 'Sayfa 3/4'
-        $html | Should -Match 'Sayfa 4/4'
+        $html | Should -Match 'Sayfa 2/5'
+        $html | Should -Match 'Sayfa 3/5'
+        $html | Should -Match 'Sayfa 4/5'
+        $html | Should -Match 'Sayfa 5/5'
+        $html | Should -Match 'DLP-01'
+        $html | Should -Match 'MIP-01'
     }
 
     It 'Haftalik HTML raporu temiz ve tek sayfalik olarak uretilir' {

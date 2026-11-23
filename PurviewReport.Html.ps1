@@ -134,6 +134,15 @@ function Get-ActionBadgeHtml {
     }
 }
 
+function Get-PostureBadgeHtml {
+    param([string]$Status)
+    switch ($Status) {
+        'Pass'  { return "<span class='badge st-ok'>GEÇTİ</span>" }
+        'Warn'  { return "<span class='badge st-warn'>DİKKAT</span>" }
+        default { return "<span class='badge st-bad'>AÇIK (RİSK)</span>" }
+    }
+}
+
 function Get-PurviewFlag {
     param($k, $Config)
     $th = $Config.Thresholds
@@ -304,19 +313,37 @@ function New-PurviewMonthlyHtml {
         try { "Son envanter toplama: $(([datetime]$k.SnapshotCollectedAt).ToString('dd.MM.yyyy HH:mm UTC'))." } catch { '' }
     } else { '' }
 
-    # --- Sayfa 2: Hassasiyet Etiketleri (Sensitivity Labels) ---
+    # --- Sayfa 2: CISO Guvenlik Durusu (10 Hijyen Kontrolu) ve Veri Sizinti Kanallari ---
+    $postureRows = ''
+    if ($k.PSObject.Properties['PostureChecks'] -and $k.PostureChecks) {
+        foreach ($pc in $k.PostureChecks) {
+            $postureRows += "<tr><td><b>$(ConvertTo-HtmlSafe $pc.Code)</b></td><td>$(ConvertTo-HtmlSafe $pc.Title)</td><td>$(Get-PostureBadgeHtml $pc.Status)</td><td>$(ConvertTo-HtmlSafe $pc.Detail)</td></tr>"
+        }
+    }
+    if (-not $postureRows) { $postureRows = "<tr><td colspan='4'>Yapılandırma hijyeni kontrol verisi bulunamadı.</td></tr>" }
+
+    $egressRows = ''
+    if ($k.PSObject.Properties['EgressChannels'] -and $k.EgressChannels) {
+        foreach ($eg in $k.EgressChannels) {
+            $egressRows += "<tr><td>$(ConvertTo-HtmlSafe $eg.Kanal)</td><td class='num'><b>$($eg.Adet)</b></td></tr>"
+        }
+    }
+    if (-not $egressRows) { $egressRows = "<tr><td colspan='2'>Sızıntı kanalı verisi bulunamadı.</td></tr>" }
+
+    $mandBadge = if ($k.LabelPolicyMandatory) { "<span class='badge st-ok'>Açık (Mandatory)</span>" } else { "<span class='badge st-warn'>Kapalı (İsteğe Bağlı)</span>" }
+    $downBadge = if ($k.LabelPolicyDowngradeReq) { "<span class='badge st-ok'>Zorunlu (Açık)</span>" } else { "<span class='badge st-bad'>Kapalı</span>" }
+
+    # --- Sayfa 3: Hassasiyet Etiketleri (Sensitivity Labels) ---
     $labelInvRows = ''
     foreach ($l in ($k.SensitivityLabels | Sort-Object priority -Descending | Select-Object -First 13)) {
         $stBadge = if ($l.isActive) { "<span class='badge st-ok'>Aktif</span>" } else { "<span class='badge st-muted'>Üst Grup</span>" }
-        $prot    = if ($l.encryptionEnabled -and $l.markingEnabled) { 'Şifreleme + Filigran' }
-                   elseif ($l.encryptionEnabled) { 'Şifreleme' }
-                   elseif ($l.markingEnabled) { 'Filigran' }
-                   else { 'Sınıflandırma' }
+        $prot    = if ($l.encryptionEnabled) { "<span class='badge st-ok'>RMS Şifreli</span>" } else { "<span class='badge st-muted'>Sınıflandırma</span>" }
+        $fmt     = if ($l.contentType) { ConvertTo-HtmlSafe $l.contentType } else { 'file, email' }
         $tip     = ConvertTo-HtmlSafe $l.tooltip
-        if ($tip.Length -gt 75) { $tip = $tip.Substring(0, 72) + '...' }
-        $labelInvRows += "<tr><td><b>$(ConvertTo-HtmlSafe $l.displayName)</b></td><td class='num'>$($l.priority)</td><td>$prot</td><td>$stBadge</td><td>$tip</td></tr>"
+        if ($tip.Length -gt 58) { $tip = $tip.Substring(0, 55) + '...' }
+        $labelInvRows += "<tr><td><b>$(ConvertTo-HtmlSafe $l.displayName)</b></td><td class='num'>$($l.priority)</td><td>$prot</td><td>$fmt</td><td>$stBadge</td><td>$tip</td></tr>"
     }
-    if (-not $labelInvRows) { $labelInvRows = "<tr><td colspan='5'>Hassasiyet etiketi tanımı bulunamadı.</td></tr>" }
+    if (-not $labelInvRows) { $labelInvRows = "<tr><td colspan='6'>Hassasiyet etiketi tanımı bulunamadı.</td></tr>" }
 
     $labelUsageRows = ''
     foreach ($lu in $k.TopLabelUsage) {
@@ -409,13 +436,14 @@ $(Get-PurviewReportCss)</head><body><div class='wrap'>
 
 <div class='page'>
   <header>$logo<h1>Aylık Purview Veri Güvenliği ve Uyumluluk Raporu</h1>
-  <div class='sub'>$customer &nbsp;|&nbsp; Microsoft Purview Yönetilen Hizmet Raporu (Sayfa 1/4 — Yönetici Özeti)<br>
+  <div class='sub'>$customer &nbsp;|&nbsp; Microsoft Purview Yönetilen Hizmet Raporu (Sayfa 1/5 — Yönetici Özeti)<br>
   Dönem: $donem &nbsp;|&nbsp; Rapor tarihi: $(Get-Date -Format 'dd.MM.yyyy') &nbsp;|&nbsp; Hizmet sağlayıcı: $provider</div></header>
 
   <h2>Yönetici Özeti</h2>
   <p>$donem döneminde $customer kiracısında <b>$($k.DlpPolicyTotal)</b> DLP politikası (<b>$($k.DlpPolicyEnforce)</b> Enforce, <b>$($k.DlpPolicyTest)</b> Test),
   <b>$($k.SensitivityLabelCount)</b> hassasiyet etiketi tanımı (<b>$($k.SensitivityLabelActive)</b> aktif), <b>$($k.SensitivityLabelPolicies)</b> etiket yayınlama politikası,
   <b>$($k.InsiderRiskPolicies)</b> iç tehdit ve <b>$($k.CommCompliancePolicies)</b> iletişim uyumu politikası izlenmiştir.
+  Yapılandırma hijyeni denetiminde <b>$($k.PostureTotalCount)</b> kontrolün <b>$($k.PosturePassCount)</b> tanesi tam uyumlu bulunmuş, <b>$($k.PostureWarnCount + $k.PostureFailCount)</b> iyileştirme alanı tespit edilmiştir.
   Dönem boyunca <b>$($k.DlpEventsTotal)</b> DLP kural eşleşmesi (<b>$($k.DlpBlockedCount)</b> engelleme, <b>$($k.DlpOverrideCount)</b> kullanıcı override),
   <b>$($k.LabelEventsTotal)</b> hassasiyet etiketi işlemi (<b>$($k.LabelAppliedCount)</b> uygulama, <b>$($k.LabelChangedCount)</b> değişim/düşürme, <b>$($k.LabelRemovedCount)</b> silme)
   ve <b>$($k.TotalIncidents)</b> güvenlik olayı (<b>$($k.IncClosed)</b> kapatılan, <b>$($k.IncOpen)</b> açık) kaydedilmiştir. $trendCumle</p>
@@ -425,11 +453,11 @@ $(Get-PurviewReportCss)</head><body><div class='wrap'>
 
   <h2>Purview Koruma ve Operasyon Özeti</h2>
   <div class='cards'>
-    <div class='card'><b>$($k.DlpPolicyTotal)</b><span>DLP politikası ($($k.DlpPolicyEnforce) Enforce)</span></div>
+    <div class='card'><b>$($k.PosturePassCount) / $($k.PostureTotalCount)</b><span>Hijyen kontrolü geçti</span></div>
+    <div class='card'><b>$($k.DlpPolicyTotal)</b><span>DLP pol. ($($k.DlpPolicyEnforce) Enforce)</span></div>
     <div class='card $(if($k.DlpEventsHigh -gt 0){'warn'})'><b>$($k.DlpEventsTotal)</b><span>DLP olayı ($($k.DlpEventsHigh) yüksek)</span></div>
     <div class='card $(if($k.DlpOverrideCount -gt 0){'amber'})'><b>$($k.DlpBlockedCount) / $($k.DlpOverrideCount)</b><span>DLP Engel / Override</span></div>
     <div class='card'><b>$($k.SensitivityLabelActive) / $($k.SensitivityLabelCount)</b><span>Aktif hassasiyet etiketi</span></div>
-    <div class='card'><b>$($k.LabelEventsTotal)</b><span>Etiket işlemi ($($k.LabelAppliedCount) uyg.)</span></div>
     <div class='card $(if($k.IncOpen -gt 0){'warn'})'><b>$($k.IncOpen) / $($k.TotalIncidents)</b><span>Açık / Toplam incident</span></div>
   </div>
 
@@ -454,8 +482,50 @@ $(Get-PurviewReportCss)</head><body><div class='wrap'>
 </div>
 
 <div class='page'>
+  <header><span class='brand'>$provider</span><h1>CISO Güvenlik Duruşu, Yapılandırma Hijyeni ve Sızıntı Kanalları</h1>
+  <div class='sub'>$customer &nbsp;|&nbsp; $donem (Sayfa 2/5 — Posture Hygiene, Exfiltration Channels &amp; Managed Service Value)</div></header>
+
+  <div class='cards'>
+    <div class='card good'><b>$($k.PosturePassCount)</b><span>Tam uyumlu kontrol (GEÇTİ)</span></div>
+    <div class='card $(if($k.PostureWarnCount -gt 0){'amber'})'><b>$($k.PostureWarnCount)</b><span>İyileştirme önerisi (DİKKAT)</span></div>
+    <div class='card $(if($k.PostureFailCount -gt 0){'warn'})'><b>$($k.PostureFailCount)</b><span>Mimari kör nokta (AÇIK)</span></div>
+    <div class='card good'><b>$($k.DlpBlockedCount)</b><span>Önlenen veri çıkışı (Block)</span></div>
+    <div class='card'><b>$($k.GovernanceDriftCount)</b><span>Yönetişim / politika işlemi</span></div>
+  </div>
+
+  <h2>10 Maddelik Purview Yapılandırma Hijyeni ve Kör Nokta Denetimi</h2>
+  <table>
+    <tr><th>Kod</th><th>Kontrol Başlığı</th><th>Durum</th><th>Canlı Kiracı Bulgusu ve Mimari Değerlendirme</th></tr>
+    $postureRows
+  </table>
+
+  <div class='two'>
+    <div class='col'>
+      <h2>Veri Sızıntı Kanalları (Exfiltration / Egress Vectors)</h2>
+      <table>
+        <tr><th>Veri Çıkış / Paylaşım Kanalı</th><th style='text-align:right'>Tespit / Olay</th></tr>
+        $egressRows
+      </table>
+    </div>
+    <div class='col'>
+      <h2>Küresel Bilgi Koruma ve Yönetişim Duruşu</h2>
+      <table>
+        <tr><th>Politika Parametresi</th><th>Durum</th></tr>
+        <tr><td>Zorunlu Etiketleme (isMandatory)</td><td>$mandBadge</td></tr>
+        <tr><td>Etiket Düşürme Gerekçesi (Downgrade Justification)</td><td>$downBadge</td></tr>
+        <tr><td>Otomatik / Varsayılan Etiketleme İşlemi</td><td><b>$($k.LabelAutoCount)</b> otomatik / <b>$($k.LabelEventsTotal)</b> toplam</td></tr>
+        <tr><td>İncelenen / Kapatılan Güvenlik Olayı (MTTR)</td><td><b>$($k.IncClosed)</b> kapatılan (Ort. <b>$($k.AvgCloseHours) sa</b>)</td></tr>
+        <tr><td>Yönetici Politika ve Arama İşlemi (Admin Drift)</td><td><b>$($k.GovernanceDriftCount)</b> işlem denetlendi</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <p class='note'>Not: Yapılandırma hijyeni kontrolleri deterministik olarak IPPS politika envanteri, Microsoft Graph labelPolicySettings ve sensitivityLabels API yanıtlarından hesaplanır; ağırlıklı yapay skor yerine her kontrolün gerçek geçme/kalma kanıtı sunulur.</p>
+</div>
+
+<div class='page'>
   <header><span class='brand'>$provider</span><h1>Hassasiyet Etiketleri ve Bilgi Koruma Analizi</h1>
-  <div class='sub'>$customer &nbsp;|&nbsp; $donem (Sayfa 2/4 — Information Protection &amp; Sensitivity Labels)</div></header>
+  <div class='sub'>$customer &nbsp;|&nbsp; $donem (Sayfa 3/5 — Information Protection &amp; Sensitivity Labels)</div></header>
 
   <div class='cards'>
     <div class='card'><b>$($k.SensitivityLabelActive) / $($k.SensitivityLabelCount)</b><span>Aktif / Toplam etiket tanımı</span></div>
@@ -467,7 +537,7 @@ $(Get-PurviewReportCss)</head><body><div class='wrap'>
 
   <h2>Kiracı Hassasiyet Etiketi Envanteri (Information Protection)</h2>
   <table>
-    <tr><th>Etiket Görünen Adı</th><th style='text-align:right'>Öncelik</th><th>Koruma Biçimi</th><th>Durum</th><th>Politika Açıklaması / Kapsam</th></tr>
+    <tr><th>Etiket Görünen Adı</th><th style='text-align:right'>Öncelik</th><th>Koruma Biçimi</th><th>Kapsam Formatları</th><th>Durum</th><th>Politika Açıklaması</th></tr>
     $labelInvRows
   </table>
 
@@ -494,7 +564,7 @@ $(Get-PurviewReportCss)</head><body><div class='wrap'>
 
 <div class='page'>
   <header><span class='brand'>$provider</span><h1>DLP Eşleşmeleri, Hassas Bilgi Türleri ve Kullanıcılar</h1>
-  <div class='sub'>$customer &nbsp;|&nbsp; $donem (Sayfa 3/4 — Data Loss Prevention Derin Analizi)</div></header>
+  <div class='sub'>$customer &nbsp;|&nbsp; $donem (Sayfa 4/5 — Data Loss Prevention Derin Analizi)</div></header>
 
   <div class='cards'>
     <div class='card'><b>$($k.DlpEventsTotal)</b><span>Toplam DLP eşleşmesi</span></div>
@@ -535,7 +605,7 @@ $(Get-PurviewReportCss)</head><body><div class='wrap'>
 
 <div class='page'>
   <header><span class='brand'>$provider</span><h1>Dönem Trendi, Politika Envanteri ve Aksiyon Planı</h1>
-  <div class='sub'>$customer &nbsp;|&nbsp; $donem (Sayfa 4/4 — Trend, Denetim ve Yönetim Önerileri)</div></header>
+  <div class='sub'>$customer &nbsp;|&nbsp; $donem (Sayfa 5/5 — Trend, Denetim ve Yönetim Önerileri)</div></header>
 
   <h2>Aylık Purview ve Güvenlik KPI Kıyaslaması</h2>
   <table>

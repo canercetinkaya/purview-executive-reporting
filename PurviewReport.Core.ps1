@@ -239,14 +239,30 @@ function Get-GraphSensitivityLabelInventory {
     param([string]$GraphToken)
 
     $labels = New-Object System.Collections.ArrayList
+    $policySettings = $null
     $status = 'Unavailable'
     $detail = ''
     $headers = @{ Authorization = "Bearer $GraphToken" }
 
+    try {
+        $polResp = Invoke-RestMethod -Method Get -Uri "$script:GraphResource/beta/security/informationProtection/labelPolicySettings" -Headers $headers
+        if ($polResp) {
+            $policySettings = [pscustomobject]@{
+                isMandatory                      = [bool]$polResp.isMandatory
+                isDowngradeJustificationRequired = [bool]$polResp.isDowngradeJustificationRequired
+                defaultLabelId                   = [string]$polResp.defaultLabelId
+                moreInfoUrl                      = [string]$polResp.moreInfoUrl
+            }
+        }
+    }
+    catch {
+        Write-Verbose 'Graph labelPolicySettings okunamadi.'
+    }
+
     foreach ($ep in @(
+        "$script:GraphResource/beta/security/informationProtection/sensitivityLabels",
         "$script:GraphResource/beta/informationProtection/policy/labels",
-        "$script:GraphResource/v1.0/security/dataSecurityAndGovernance/sensitivityLabels",
-        "$script:GraphResource/beta/security/dataSecurityAndGovernance/sensitivityLabels"
+        "$script:GraphResource/v1.0/security/dataSecurityAndGovernance/sensitivityLabels"
     )) {
         try {
             $resp = Invoke-WithRetry { Invoke-RestMethod -Method Get -Uri $ep -Headers $headers }
@@ -265,6 +281,15 @@ function Get-GraphSensitivityLabelInventory {
                             elseif ($item.tooltip) { [string]$item.tooltip }
                             else { '' }
                     $active = if ($null -ne $item.isActive) { [bool]$item.isActive } else { $true }
+                    $appliable = if ($item.PSObject.Properties['isAppliable'] -and $null -ne $item.isAppliable) { [bool]$item.isAppliable } else { $active }
+                    $hasProt = if ($item.PSObject.Properties['hasProtection'] -and $null -ne $item.hasProtection) {
+                        [bool]$item.hasProtection
+                    } else {
+                        ($fullName -match 'Confidential|Highly|Gizli|RECETE' -and $fullName -notmatch 'Anyone')
+                    }
+                    $formats = if ($item.PSObject.Properties['contentFormats'] -and $item.contentFormats) {
+                        (@($item.contentFormats) -join ', ')
+                    } else { 'file, email' }
 
                     [void]$labels.Add([pscustomobject]@{
                         id                = [string]$item.id
@@ -272,11 +297,12 @@ function Get-GraphSensitivityLabelInventory {
                         displayName       = $fullName
                         parentName        = $parentName
                         priority          = $prio
-                        encryptionEnabled = ($fullName -match 'Confidential|Highly|Gizli|RECETE' -or ($item.PSObject.Properties['hasProtection'] -and $item.hasProtection))
-                        markingEnabled    = ($fullName -match 'Confidential|Highly|Gizli|RECETE')
-                        contentType       = 'File, Email, Site'
+                        encryptionEnabled = $hasProt
+                        markingEnabled    = $hasProt
+                        contentType       = $formats
                         tooltip           = $desc
                         isActive          = $active
+                        isAppliable       = $appliable
                     })
                 }
                 $status = 'Available'
@@ -291,9 +317,10 @@ function Get-GraphSensitivityLabelInventory {
     }
 
     return [pscustomobject]@{
-        Status = $status
-        Detail = $detail
-        Labels = @($labels.ToArray())
+        Status         = $status
+        Detail         = $detail
+        Labels         = @($labels.ToArray())
+        PolicySettings = $policySettings
     }
 }
 
@@ -624,8 +651,9 @@ function Get-PolicySnapshotData {
         }
     }
 
-    # Graph uzerinden canli Hassasiyet Etiketi tanimlarini tamamla
+    # Graph uzerinden canli Hassasiyet Etiketi tanimlarini ve politika ayarlarini tamamla
     $graphLabels = @()
+    $graphPolicySettings = $null
     $labelSourceDetail = ''
     if ($GraphToken) {
         $gLblRes = Get-GraphSensitivityLabelInventory -GraphToken $GraphToken
@@ -633,6 +661,7 @@ function Get-PolicySnapshotData {
             $graphLabels = $gLblRes.Labels
             $labelSourceDetail = $gLblRes.Detail
         }
+        $graphPolicySettings = $gLblRes.PolicySettings
     }
 
     if ($snapObj) {
@@ -641,6 +670,9 @@ function Get-PolicySnapshotData {
             $snapObj | Add-Member -NotePropertyName 'sensitivityLabels' -NotePropertyValue $graphLabels -Force
             $snapObj | Add-Member -NotePropertyName 'sensitivityLabelCount' -NotePropertyValue $graphLabels.Count -Force
             $detail = "$detail + $labelSourceDetail"
+        }
+        if ($graphPolicySettings -and (-not $snapObj.PSObject.Properties['labelPolicySettings'])) {
+            $snapObj | Add-Member -NotePropertyName 'labelPolicySettings' -NotePropertyValue $graphPolicySettings -Force
         }
     }
     elseif ($graphLabels.Count -gt 0) {
@@ -651,6 +683,7 @@ function Get-PolicySnapshotData {
             sensitivityLabels           = $graphLabels
             sensitivityLabelCount       = $graphLabels.Count
             sensitivityLabelPolicyCount = 0
+            labelPolicySettings         = $graphPolicySettings
             retentionPolicyCount        = 0
             insiderRiskPolicyCount      = 0
             commCompliancePolicyCount   = 0
@@ -801,12 +834,14 @@ function New-PurviewKpi {
     $irPolCount      = 0
     $commPolCount    = 0
     $snapCollectedAt = ''
+    $labelPolicySet  = $null
 
     if ($snap) {
         if ($snap.PSObject.Properties['dlpPolicies'] -and $snap.dlpPolicies)                 { $dlpPolicies     = @($snap.dlpPolicies) }
         if ($snap.PSObject.Properties['dlpRules'] -and $snap.dlpRules)                       { $dlpRules        = @($snap.dlpRules) }
         if ($snap.PSObject.Properties['sensitivityLabels'] -and $snap.sensitivityLabels)     { $labels          = @($snap.sensitivityLabels) }
         if ($snap.PSObject.Properties['sensitivityLabelPolicies'] -and $snap.sensitivityLabelPolicies) { $labelPolicies = @($snap.sensitivityLabelPolicies) }
+        if ($snap.PSObject.Properties['labelPolicySettings'] -and $snap.labelPolicySettings) { $labelPolicySet  = $snap.labelPolicySettings }
         if ($snap.PSObject.Properties['sensitivityLabelCount'])                              { $labelCount      = [int]$snap.sensitivityLabelCount }
         if ($snap.PSObject.Properties['sensitivityLabelPolicyCount'])                        { $labelPolCount   = [int]$snap.sensitivityLabelPolicyCount }
         if ($snap.PSObject.Properties['autoLabelPolicyCount'])                               { $autoLblPolCount = [int]$snap.autoLabelPolicyCount }
@@ -886,6 +921,16 @@ function New-PurviewKpi {
     $auditByActor      = @{}
     $auditPurviewCount = 0
 
+    $egressCounts = [ordered]@{
+        'Harici E-posta (Exchange DLP)'             = 0
+        'SharePoint / OneDrive Dış & Anonim Paylaşım' = 0
+        'USB / Çıkarılabilir Medya (Endpoint)'      = 0
+        '3. Taraf Bulut / Web Yükleme (Cloud Egress)'= 0
+        'Fiziksel Yazıcı & Pano (Print / Clipboard)' = 0
+        'Üretken Yapay Zekâ / Copilot & AI Siteleri'= 0
+    }
+    $governanceDriftCount = 0
+
     foreach ($rec in $auditRecs) {
         if (-not $rec) { continue }
         $payload = $rec
@@ -929,6 +974,16 @@ function New-PurviewKpi {
 
         if ("$op $rawWl" -match 'Dlp|Label|Sensitivity|Compliance|Purview|Insider|Retention|eDiscovery|Mip') {
             $auditPurviewCount++
+        }
+
+        # Sizinti Kanali (Egress) ve Yonetisim Kaymasi (Admin Drift)
+        switch -Regex ($op) {
+            'FileCopiedToRemovableMedia'              { $egressCounts['USB / Çıkarılabilir Medya (Endpoint)']++ }
+            'FileUploadedToCloud'                     { $egressCounts['3. Taraf Bulut / Web Yükleme (Cloud Egress)']++ }
+            'FilePrinted|FileCopiedToClipboard'       { $egressCounts['Fiziksel Yazıcı & Pano (Print / Clipboard)']++ }
+            'AnonymousLinkCreated|CompanyLinkCreated|SharingSet|AddedToSecureLink' { $egressCounts['SharePoint / OneDrive Dış & Anonim Paylaşım']++ }
+            'CopilotInteraction|AIAppInteraction|ConnectedAIApp' { $egressCounts['Üretken Yapay Zekâ / Copilot & AI Siteleri']++ }
+            '^(New|Set|Remove)-(Dlp|Label|Retention|Insider|Supervisory|Compliance)|AuditSearchCreated|Start-ComplianceSearchAction' { $governanceDriftCount++ }
         }
 
         # Hassasiyet Etiketi Kullanim Ayristirma (Admin Get-* sorgularini haric tut)
@@ -1091,6 +1146,13 @@ function New-PurviewKpi {
         if (-not $dlpWorkloadHits.Contains($wl)) { $dlpWorkloadHits[$wl] = 0 }
         $dlpWorkloadHits[$wl] = [int]$dlpWorkloadHits[$wl] + 1
 
+        switch -Regex ("$wl $pName $rName") {
+            'Copilot|AI'              { $egressCounts['Üretken Yapay Zekâ / Copilot & AI Siteleri']++; break }
+            'Exchange'                { $egressCounts['Harici E-posta (Exchange DLP)']++; break }
+            'SharePoint|OneDrive'     { $egressCounts['SharePoint / OneDrive Dış & Anonim Paylaşım']++; break }
+            'Endpoint'                { $egressCounts['3. Taraf Bulut / Web Yükleme (Cloud Egress)']++; break }
+        }
+
         $uId = if ($ev.PSObject.Properties['UserId'] -and $ev.UserId) { [string]$ev.UserId }
                elseif ($ev.PSObject.Properties['ExchangeMetaData'] -and $ev.ExchangeMetaData -and $ev.ExchangeMetaData.From) { [string]$ev.ExchangeMetaData.From }
                elseif ($ev.PSObject.Properties['SharePointMetaData'] -and $ev.SharePointMetaData -and $ev.SharePointMetaData.FileOwner) { [string]$ev.SharePointMetaData.FileOwner }
@@ -1194,11 +1256,101 @@ function New-PurviewKpi {
             }
         })
 
+    $egressList = @($egressCounts.GetEnumerator() | ForEach-Object {
+        [pscustomobject]@{ Kanal = $_.Key; Adet = $_.Value }
+    })
+
+    # 10 Maddelik Deterministik CISO Guvenlik Durusu ve Yapilandirma Hijyeni Matrisi
+    $postureChecks = New-Object System.Collections.ArrayList
+
+    # 1. DLP-01: Politika Zorlama (Enforce) Durumu
+    $dlp01St = if ($dlpPolicies.Count -eq 0) { 'Fail' } elseif ($dlpTest -eq 0) { 'Pass' } else { 'Warn' }
+    $dlp01Dt = if ($dlpPolicies.Count -eq 0) { 'Hic DLP politikasi tanimli degil' }
+               elseif ($dlpTest -eq 0) { "Tum DLP politikalari ($dlpEnforce/$($dlpPolicies.Count)) Enforce kipinde" }
+               else { "$dlpEnforce Enforce, $dlpTest politika halen Test/Simulasyon kipinde" }
+    [void]$postureChecks.Add([pscustomobject]@{ Code = 'DLP-01'; Title = 'DLP Politika Zorlama (Enforce) Duruşu'; Status = $dlp01St; Detail = $dlp01Dt })
+
+    # 2. DLP-02: Is Yuku Kapsam Tamligi
+    $hasEx = $workloadCounts.Contains('Exchange')
+    $hasSp = ($workloadCounts.Contains('SharePoint') -or $workloadCounts.Contains('OneDrive') -or $workloadCounts.Contains('Microsoft 365'))
+    $hasTm = ($workloadCounts.Contains('Teams') -or $workloadCounts.Contains('Microsoft 365'))
+    $hasEp = $workloadCounts.Contains('Endpoint')
+    $covCnt = @($hasEx, $hasSp, $hasTm, $hasEp | Where-Object { $_ }).Count
+    $dlp02St = if ($covCnt -eq 4) { 'Pass' } elseif ($covCnt -ge 2) { 'Warn' } else { 'Fail' }
+    [void]$postureChecks.Add([pscustomobject]@{ Code = 'DLP-02'; Title = 'Kritik İş Yükü Kapsamı (Exchange, SharePoint, Teams, Endpoint)'; Status = $dlp02St; Detail = "$covCnt / 4 ana is yuku katmani DLP kapsami altinda" })
+
+    # 3. DLP-03: Kullanici Ezme (Override) Denetimi
+    $dlp03St = if ($dlpOverrideCount -eq 0) { 'Pass' } elseif ($dlpOverrideCount -le 5) { 'Warn' } else { 'Fail' }
+    [void]$postureChecks.Add([pscustomobject]@{ Code = 'DLP-03'; Title = 'DLP Kullanıcı Override ve Gerekçe Hijyeni'; Status = $dlp03St; Detail = "$dlpOverrideCount kullanici override islemi ($dlpBlockedCount dogrudan engelleme)" })
+
+    # 4. MIP-01: Zorunlu Etiketleme (isMandatory)
+    $isMand = if ($labelPolicySet) { [bool]$labelPolicySet.isMandatory }
+              elseif ($labelPolicies.Count -gt 0) { (@($labelPolicies | Where-Object { $_.mandatory }).Count -gt 0) }
+              else { $false }
+    $mip01St = if ($isMand) { 'Pass' } else { 'Warn' }
+    $mip01Dt = if ($isMand) { 'Zorunlu etiketleme (isMandatory: true) etkin' } else { 'Zorunlu etiketleme kapali (isMandatory: false); etiketsiz belge kaydedilebilir' }
+    [void]$postureChecks.Add([pscustomobject]@{ Code = 'MIP-01'; Title = 'Zorunlu Hassasiyet Etiketlemesi (Mandatory Labeling)'; Status = $mip01St; Detail = $mip01Dt })
+
+    # 5. MIP-02: Etiket Dusurme Gerekcesi (isDowngradeJustificationRequired)
+    $isDownReq = if ($labelPolicySet) { [bool]$labelPolicySet.isDowngradeJustificationRequired }
+                 elseif ($labelPolicies.Count -gt 0) { (@($labelPolicies | Where-Object { $_.requireDowngradeJustification }).Count -gt 0) }
+                 else { $false }
+    $mip02St = if ($isDownReq) { 'Pass' } else { 'Fail' }
+    $mip02Dt = if ($isDownReq) { 'Etiket dusurme gerekcesi zorunlulugu (true) etkin' } else { 'Etiket dusurme gerekcesi zorunlu degil (sızıntı riski)' }
+    [void]$postureChecks.Add([pscustomobject]@{ Code = 'MIP-02'; Title = 'Etiket Seviyesi Düşürme Gerekçesi (Downgrade Justification)'; Status = $mip02St; Detail = $mip02Dt })
+
+    # 6. MIP-03: Varsayilan Etiket (defaultLabelId)
+    $defLbl = if ($labelPolicySet -and $labelPolicySet.defaultLabelId) { [string]$labelPolicySet.defaultLabelId } else { '' }
+    $mip03St = if (-not [string]::IsNullOrWhiteSpace($defLbl)) { 'Pass' } else { 'Warn' }
+    $mip03Dt = if (-not [string]::IsNullOrWhiteSpace($defLbl)) { "Varsayilan etiket tanimli ($defLbl)" } else { 'Varsayilan belge/e-posta etiketi (defaultLabelId) tanimsiz' }
+    [void]$postureChecks.Add([pscustomobject]@{ Code = 'MIP-03'; Title = 'Varsayılan Hassasiyet Etiketi (Default Label)'; Status = $mip03St; Detail = $mip03Dt })
+
+    # 7. MIP-04: Gizli Etiketlerde Kriptografik Sifreleme (hasProtection)
+    $highLabels = @($labels | Where-Object { $_.isActive -and $_.priority -ge 5 })
+    $unencHigh  = @($highLabels | Where-Object { -not $_.encryptionEnabled })
+    $mip04St = if ($highLabels.Count -eq 0) { 'Warn' } elseif ($unencHigh.Count -eq 0) { 'Pass' } else { 'Warn' }
+    $unencNames = ($unencHigh | ForEach-Object { $_.displayName }) -join ', '
+    $mip04Dt = if ($highLabels.Count -eq 0) { 'Oncelik >= 5 olan aktif etiket bulunamadi' }
+               elseif ($unencHigh.Count -eq 0) { "$($highLabels.Count) gizli/kritik etiketin tamaminda RMS sifreleme etkin" }
+               else { "$($unencHigh.Count) gizli etikette sifreleme kapali: $unencNames" }
+    [void]$postureChecks.Add([pscustomobject]@{ Code = 'MIP-04'; Title = 'Gizli ve Kritik Etiketlerde Şifreleme (hasProtection)'; Status = $mip04St; Detail = $mip04Dt })
+
+    # 8. MIP-05: SharePoint Site & Teams Kapsayici (site, unifiedgroup) Kapsami
+    $siteLabels = @($labels | Where-Object { $_.isActive -and "$($_.contentType)" -match 'site|unifiedgroup' })
+    $mip05St = if ($siteLabels.Count -ge 2) { 'Pass' } elseif ($siteLabels.Count -eq 1) { 'Warn' } else { 'Fail' }
+    $siteNames = ($siteLabels | ForEach-Object { $_.displayName }) -join ', '
+    $mip05Dt = if ($siteLabels.Count -gt 0) { "$($siteLabels.Count) aktif etikette SharePoint Site / M365 Grup kapsami acik ($siteNames)" }
+               else { 'Hicbir aktif etikette SharePoint Site / Teams kapsayici korumasi acik degil' }
+    [void]$postureChecks.Add([pscustomobject]@{ Code = 'MIP-05'; Title = 'SharePoint Site ve Teams Kapsayıcı Etiketleme Kapsamı'; Status = $mip05St; Detail = $mip05Dt })
+
+    # 9. DLM-01: Veri Yasam Dongusu ve Saklama (Retention)
+    $dlm01St = if ($retPolCount -gt 0 -or $retLblCount -gt 0) { 'Pass' } else { 'Fail' }
+    $dlm01Dt = if ($retPolCount -gt 0 -or $retLblCount -gt 0) { "$retPolCount saklama politikasi, $retLblCount kayit etiketi aktif" }
+               else { '0 aktif saklama (Retention) politikasi — KVKK/GDPR veri minimizasyonu acigi' }
+    [void]$postureChecks.Add([pscustomobject]@{ Code = 'DLM-01'; Title = 'Veri Yaşam Döngüsü ve Saklama Politikası (Data Lifecycle)'; Status = $dlm01St; Detail = $dlm01Dt })
+
+    # 10. IRM-01: Ic Tehdit (Insider Risk) ve Iletisim Uyumu
+    $irm01St = if ($irPolCount -gt 0 -and $commPolCount -gt 0) { 'Pass' } elseif ($irPolCount -gt 0 -or $commPolCount -gt 0) { 'Warn' } else { 'Fail' }
+    [void]$postureChecks.Add([pscustomobject]@{ Code = 'IRM-01'; Title = 'İç Tehdit (Insider Risk) ve İletişim Uyumu Kapsamı'; Status = $irm01St; Detail = "$irPolCount Ic Tehdit politikasi, $commPolCount Iletisim Uyumu politikasi aktif" })
+
+    $posturePassCnt = @($postureChecks | Where-Object { $_.Status -eq 'Pass' }).Count
+    $postureWarnCnt = @($postureChecks | Where-Object { $_.Status -eq 'Warn' }).Count
+    $postureFailCnt = @($postureChecks | Where-Object { $_.Status -eq 'Fail' }).Count
+
     # Otomatik yonetim onerileri
     $recs = New-Object System.Collections.ArrayList
     $testLimit = if ($th -and $th.PSObject.Properties['TestModeDlpPolicies']) { [int]$th.TestModeDlpPolicies } else { 1 }
     if ($dlpTest -ge $testLimit -and $dlpTest -gt 0) {
         [void]$recs.Add("Test kipindeki $dlpTest DLP politikasini yanlis pozitif dogrulamasi sonrasi Enforce kipine gecirin.")
+    }
+    if (-not $isMand) {
+        [void]$recs.Add('Etiket politikasinda Zorunlu Etiketleme (isMandatory: true) ve Varsayilan Etiket (defaultLabelId) ayarlarini etkinlestirin.')
+    }
+    if ($unencHigh.Count -gt 0) {
+        [void]$recs.Add("Gizli seviyede olmasina ragmen sifrelemesi kapali olan etiketlerde ($unencNames) RMS sifrelemesini etkinlestirin veya devre disi birakin.")
+    }
+    if ($siteLabels.Count -le 1) {
+        [void]$recs.Add('Confidential, Highly Confidential ve RECETE etiketlerinde SharePoint Sitesi ve Teams (site, unifiedgroup) kapsayici kapsamini acin.')
     }
     if ($dlpOverrideCount -gt 0) {
         [void]$recs.Add("Donem icinde kullanicilar tarafindan $dlpOverrideCount kez DLP kurali gerekce girilerek asilmistir (Override); gerekce metinlerini denetleyin.")
@@ -1302,6 +1454,16 @@ function New-PurviewKpi {
         AuditWorkloadBreakdown    = $auditByWorkload
         TopAuditOperations        = $topAuditOperations
         TopAuditActors            = $topAuditActors
+        GovernanceDriftCount      = $governanceDriftCount
+        EgressChannels            = $egressList
+
+        PostureChecks             = @($postureChecks.ToArray())
+        PosturePassCount          = $posturePassCnt
+        PostureWarnCount          = $postureWarnCnt
+        PostureFailCount          = $postureFailCnt
+        PostureTotalCount         = $postureChecks.Count
+        LabelPolicyMandatory      = $isMand
+        LabelPolicyDowngradeReq   = $isDownReq
 
         EDiscoveryCasesTotal      = $cases.Count
         EDiscoveryCasesOpen       = @($cases | Where-Object { $_.status -eq 'active' }).Count
@@ -1407,6 +1569,23 @@ function New-PurviewSampleData {
         }
     }
 
+    foreach ($eg in @(
+        @{ Op = 'FileCopiedToRemovableMedia'; Wl = 'Endpoint'; User = 'arge.analist@contoso.com'; Cnt = (3 * $mult) }
+        @{ Op = 'FileUploadedToCloud'; Wl = 'Endpoint'; User = 'satis.destek@contoso.com'; Cnt = (4 * $mult) }
+        @{ Op = 'FilePrinted'; Wl = 'Endpoint'; User = 'ik.bordro@contoso.com'; Cnt = (2 * $mult) }
+        @{ Op = 'AnonymousLinkCreated'; Wl = 'SharePoint'; User = 'tedarik.uzmani@contoso.com'; Cnt = (3 * $mult) }
+        @{ Op = 'CopilotInteraction'; Wl = 'Copilot'; User = 'klinik.koordinator@contoso.com'; Cnt = (8 * $mult) }
+        @{ Op = 'Set-DlpComplianceRule'; Wl = 'SecurityComplianceCenter'; User = 'secops.admin@contoso.com'; Cnt = 2 }
+    )) {
+        for ($i = 1; $i -le $eg.Cnt; $i++) {
+            [void]$auditRecs.Add([pscustomobject]@{
+                Operation = $eg.Op
+                Workload  = $eg.Wl
+                UserId    = $eg.User
+            })
+        }
+    }
+
     $alerts = @(
         [pscustomobject]@{ id = 'a1'; title = 'DLP policy match: Multiple TCKN and IBAN records shared externally'; severity = 'high'; status = 'inProgress'; serviceSource = 'microsoftPurview'; category = 'DataLossPrevention'; createdDateTime = $End.AddDays(-2).ToString('o') }
         [pscustomobject]@{ id = 'a2'; title = 'Sensitivity label downgraded from RECETE (Kritik Veri) to General'; severity = 'high'; status = 'new'; serviceSource = 'microsoftPurview'; category = 'InformationProtection'; createdDateTime = $End.AddDays(-4).ToString('o') }
@@ -1428,6 +1607,12 @@ function New-PurviewSampleData {
         sensitivityLabels           = $labels
         sensitivityLabelCount       = 13
         sensitivityLabelPolicyCount = 2
+        labelPolicySettings         = [pscustomobject]@{
+            isMandatory                      = $false
+            isDowngradeJustificationRequired = $true
+            defaultLabelId                   = ''
+            moreInfoUrl                      = ''
+        }
         autoLabelPolicyCount        = 2
         retentionPolicyCount        = 3
         retentionLabelCount         = 4
